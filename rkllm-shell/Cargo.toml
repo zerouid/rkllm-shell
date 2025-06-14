@@ -1,0 +1,18 @@
+[package]
+name = "rkllm-shell"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.8.4"
+chrono = { version = "0.4.41", features = ["serde"] }
+clap = { version = "4.5.39", features = ["derive"] }
+config = "0.15.11"
+directories = "6.0.0"
+log = { version = "0.4.27", features = ["std"] }
+owo-colors = { version = "4.2.1", features = ["supports-colors"] }
+rkllm-api-sys = { workspace = true }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+thiserror = "2.0.12"
+tokio = { version = "1", features = ["full"] }

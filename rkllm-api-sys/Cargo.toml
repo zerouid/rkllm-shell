@@ -1,0 +1,11 @@
+[package]
+name = "rkllm-api-sys"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[build-dependencies]
+anyhow.workspace = true
+bindgen = "0.71.1"
+reqwest.workspace = true
