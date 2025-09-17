@@ -1,0 +1,15 @@
+@baseurl = https://9d02vl41-3000.usw3.devtunnels.ms
+
+###
+POST {{baseurl}}/api/chat
+Content-Type: application/json
+
+{
+    "model":"something",
+    "messages": [
+    {
+        "role": "user",
+        "content": "why is the sky blue?"
+    }
+  ]
+}

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use clap::{ Parser, Subcommand};
+use clap::{ Parser };
 
 use crate::{
-    commands::{self, serve, info},
+    commands::Command,
     config::Config,
     error::Result,
 };
@@ -20,20 +20,25 @@ pub struct Args {
     pub verbosity: u8,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
-#[derive(Subcommand)]
-pub enum Command {
-    Serve(serve::Args),
-    Info(info::Args),
-}
-
-pub fn route(config: &Config, options: Args) -> Result<()> {
-    use Command::{Serve, Info};
-
-    match options.command {
-        Serve(options) => commands::serve::run(config, &options),
-        Info(_) => commands::info::run(config),
+impl Args {
+    pub async fn run_command(self, config: &Config) -> Result<()> {
+        match self.command {
+            Some(command) => {
+                let (_server_handle, shutdown_tx) = crate::server::start_background_server(config).await?;
+            let tx = if matches!(command, Command::Stop(_)) {
+                Some(shutdown_tx)
+            } else {
+                None
+            };
+            command.run(config, tx).await
+            },
+            None => {
+                let (_server_handle, shutdown_tx) = crate::server::start_background_server(config).await?;
+                crate::commands::run_repl(config, shutdown_tx).await
+            }
+        }
     }
 }

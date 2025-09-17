@@ -28,13 +28,13 @@ impl Default for AppInfo {
     fn default() -> Self {
         Self {
             name: APP_NAME.into(),
-            homepage: env!("CARGO_PKG_HOMEPAGE"),
+            homepage: option_env!("CARGO_PKG_HOMEPAGE").unwrap_or(""),
             version: env!("CARGO_PKG_VERSION"),
         }
     }
 }
 
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     let mut args = Args::parse();
     let config_dir = args.config_dir.get_or_insert_with(|| {
         ProjectDirs::from(APP_QUALIFIER, APP_ORGANIZATION, APP_NAME)
@@ -47,12 +47,12 @@ fn run() -> Result<()> {
     let _ = logging::init(&args.verbosity);
 
     let config = Config::load(config_dir)?;
-    let _ = crate::args::route(&config, args);
-    Ok(())
+    args.run_command(&config).await
 }
 
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run().await {
         write::error(error).expect("cannot write error to stderr");
         std::process::exit(1);
     }

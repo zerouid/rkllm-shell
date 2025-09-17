@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+hf-hub = "0.3"
 axum = "0.8.4"
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.39", features = ["derive"] }
@@ -16,3 +17,8 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.140", features = ["raw_value"] }
 thiserror = "2.0.12"
 tokio = { version = "1", features = ["full"] }
+utoipa = { version = "5.4.0", features = ["axum_extras", "chrono", "macros"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa-axum = "0.2"
+clap-repl = { version = "0.3.2", features = ["async"] }
+reqwest = { workspace = true, features = ["json"]}

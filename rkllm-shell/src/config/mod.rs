@@ -8,16 +8,27 @@ use serde::Deserialize;
 
 use crate::error::Result;
 
-const CONFIG_FILE_NAME: &str = "config.toml";
+const CONFIG_FILE_NAME: &str = "config.yaml";
 
 const DEFAULT_CONFIG_FILE_CONTENT: &str = include_str!("default.yaml");
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Config {
     pub models_path: Option<PathBuf>,
+    pub base_url: String,
 
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            models_path: Some(PathBuf::from("./data")),
+            base_url: "0.0.0.0:3000".into(),
+            dir: PathBuf::from("."),
+        }
+    }
 }
 
 impl Config {

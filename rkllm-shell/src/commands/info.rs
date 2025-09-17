@@ -11,7 +11,7 @@ use crate::{
 #[derive(Default, Parser)]
 pub struct Args;
 
-pub fn run(config: &Config) -> Result<()> {
+pub async fn run(config: &Config) -> Result<()> {
     let info = AppInfo::default();
     let mappings = [
         ("Name", info.name.as_str()),

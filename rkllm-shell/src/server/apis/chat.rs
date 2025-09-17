@@ -7,6 +7,15 @@ use crate::server::{
 };
 
 
+#[utoipa::path(
+    post,
+    path = "/api/chat",
+    request_body = ChatCompletionRequest,
+    responses(
+        (status = 200, description = "Chat completion response", body = ChatCompletionResponse)
+    ),
+    tag = "rkllm"
+)]
 pub async fn generate_chat_completion(State(rt): State<RkllmRuntime>, Json(request): Json<ChatCompletionRequest>,) -> axum::response::Result<Json<ChatCompletionResponse>>{
     let r = CompletionRequest::Chat(request.clone());
     let model = rt.get_request_model(&r)

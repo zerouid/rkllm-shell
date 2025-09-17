@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
 
 use crate::server::defaults::*;
 
@@ -26,7 +25,7 @@ fn default_model_options() -> ModelOptions {
 /// Enumeration of values.
 /// Since this enum's variants do not hold data, we can easily define them as `#[repr(C)]`
 /// which helps with FFI.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum ServiceTier {
     #[serde(rename = "auto")]
     Auto,
@@ -36,7 +35,7 @@ pub enum ServiceTier {
     Flex,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 pub enum Role {
     #[serde(rename = "system")]
     System,
@@ -50,7 +49,7 @@ pub enum Role {
 
 /// Developer-provided instructions that the model should follow, regardless of messages sent by the user. 
 /// With o1 models and newer, `developer` messages replace the previous `system` messages. 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 pub struct ChatCompletionRequestMessage {
     #[serde(rename = "content")]
     pub content: String,
@@ -74,7 +73,7 @@ pub struct ChatCompletionRequestMessage {
 
 
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 pub struct ModelOptions {
     /// Sets the size of the context window used to generate the next token. (Default: 2048)
     #[serde(rename = "num_ctx")]
@@ -135,7 +134,7 @@ pub struct ModelOptions {
     pub min_p: f32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 pub struct ChatCompletionRequest {
     /// A list of messages comprising the conversation so far. Depending on the [model](/docs/models) you use, different message types (modalities) are supported, like [text](/docs/guides/text-generation), [images](/docs/guides/vision), and [audio](/docs/guides/audio). 
     #[serde(rename = "messages")]
@@ -149,8 +148,9 @@ pub struct ChatCompletionRequest {
     #[serde(default = "default_model_options")]
     pub options: ModelOptions,
 
+    /// The format to return a response in. Format can be "json" or a JSON schema.
     #[serde(rename = "format")]
-    pub format: Option<Box<RawValue>>,
+    pub format: Option<String>,
 
     /// If set to true, the model response data will be streamed to the client as it is generated using [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#Event_stream_format). See the [Streaming section below](/docs/api-reference/chat/streaming) for more information, along with the [streaming responses](/docs/guides/streaming-responses) guide for more information on how to handle the streaming events. 
     #[serde(rename = "stream")]
@@ -164,7 +164,7 @@ pub struct ChatCompletionRequest {
 }
 
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 pub struct GenerateRequest {
     #[serde(rename = "model")]
     pub model: String,
@@ -196,8 +196,9 @@ pub struct GenerateRequest {
     #[serde(default = "default_model_options")]
     pub options: ModelOptions,
 
+    /// The format to return a response in. Format can be "json" or a JSON schema.
     #[serde(rename = "format")]
-    pub format: Option<Box<RawValue>>,
+    pub format: Option<String>,
 
     /// KeepAlive controls how long the model will stay loaded in memory following
 	/// this request.
@@ -216,7 +217,7 @@ pub struct GenerateRequest {
 }
 
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChatCompletionResponse {
     #[serde(rename = "model")]
     pub model: String,
@@ -234,7 +235,7 @@ pub struct ChatCompletionResponse {
     pub done: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GenerateResponse {
     #[serde(rename = "model")]
     pub model: String,
@@ -260,7 +261,7 @@ pub struct GenerateResponse {
 }
 
 /// PullRequest is the request passed to [Client.Pull].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PullRequest {
     #[serde(rename = "model")]
 	pub model: String,
@@ -272,19 +273,19 @@ pub struct PullRequest {
 
 /// ProgressResponse is the response passed to progress functions like
 /// [PullProgressFunc] and [PushProgressFunc].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProgressResponse {
     #[serde(rename = "status")]
-	status:    String,
+	pub status:    String,
     #[serde(rename = "digest")]
-	digest:    String ,
+	pub digest:    Option<String>,
     #[serde(rename = "total")]
-	total:     i64,
+	pub total:     Option<i64>,
     #[serde(rename = "completed")]
-	completed: i64 ,
+	pub completed: Option<i64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum EmbedInput {
     /// A single string to embed.
     String(String),
@@ -293,7 +294,7 @@ pub enum EmbedInput {
 }
 
 /// EmbedRequest is the request passed to [Client.Embed].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EmbedRequest {
 	/// Model is the model name.
     #[serde(rename = "model")]
@@ -321,7 +322,7 @@ pub struct EmbedRequest {
 }
 
 /// EmbedResponse is the response from [Client.Embed].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EmbedResponse {
 	#[serde(rename = "model")]
 	pub model: String,
@@ -337,14 +338,14 @@ pub struct EmbedResponse {
 
 
 // DeleteRequest is the request passed to [Client.Delete].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DeleteRequest {
 	#[serde(rename = "model")]
 	pub model: String,
 }
 
 // ShowRequest is the request passed to [Client.Show].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct  ShowRequest  {
 	#[serde(rename = "model")]
 	pub model: String,
@@ -361,7 +362,7 @@ pub struct  ShowRequest  {
 }
 
 // ShowResponse is the response returned from [Client.Show].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct  ShowResponse {
 	pub license: String,
 	pub modelfile: String,
@@ -380,13 +381,13 @@ pub struct  ShowResponse {
 }
 
 // ListResponse is the response from [Client.List].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ListResponse {
 	pub models: Vec<ListModelResponse >,
 }
 
 // ListModelResponse is a single model description in [ListResponse].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ListModelResponse {
 	name:    String,
 	model:    String,
@@ -398,7 +399,7 @@ pub struct ListModelResponse {
 }
 
 /// ModelDetails provides details about a model.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ModelDetails {
 	parent_model :   String,
 	format :   String,
