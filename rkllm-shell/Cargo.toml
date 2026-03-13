@@ -22,3 +22,6 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 utoipa-axum = "0.2"
 clap-repl = { version = "0.3.2", features = ["async"] }
 reqwest = { workspace = true, features = ["json"]}
+sha2 = "0.10"
+tokio-stream = "0.1"
+futures = "0.3"

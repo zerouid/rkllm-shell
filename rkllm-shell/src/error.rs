@@ -10,4 +10,6 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("server error: {0}")]
     Server(String),
+    #[error("network error: {0}")]
+    Network(String),
 }

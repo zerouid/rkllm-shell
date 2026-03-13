@@ -44,6 +44,10 @@ pub (crate) fn default_stream() -> bool {
     false
 }
 
+pub (crate) fn default_insecure() -> bool {
+    false
+}
+
 pub (crate) fn default_keep_alive() -> Duration {
     Duration::from_secs(300) // 5 minutes    
 }

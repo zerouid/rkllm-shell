@@ -5,6 +5,81 @@ use serde::{Deserialize, Serialize};
 
 use crate::server::defaults::*;
 
+// ---------------------------------------------------------------------------
+// OpenAI-compatible types  (/v1/chat/completions)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+pub struct OpenAiMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+pub struct OpenAiChatRequest {
+    pub model: String,
+    pub messages: Vec<OpenAiMessage>,
+    #[serde(default = "default_stream")]
+    pub stream: bool,
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+    #[serde(default = "default_top_p")]
+    pub top_p: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i32>,
+    #[serde(default = "default_keep_alive")]
+    pub keep_alive: Duration,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenAiChoice {
+    pub index: u32,
+    pub message: OpenAiMessage,
+    pub finish_reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenAiUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenAiChatResponse {
+    pub id: String,
+    pub object: String,
+    pub created: i64,
+    pub model: String,
+    pub choices: Vec<OpenAiChoice>,
+    pub usage: OpenAiUsage,
+}
+
+/// Streaming delta chunk for OpenAI SSE
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenAiDelta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenAiStreamChoice {
+    pub index: u32,
+    pub delta: OpenAiDelta,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenAiChatChunk {
+    pub id: String,
+    pub object: String,
+    pub created: i64,
+    pub model: String,
+    pub choices: Vec<OpenAiStreamChoice>,
+}
+
 fn default_model_options() -> ModelOptions {
     ModelOptions {
         num_ctx: default_context_window(),
@@ -21,7 +96,16 @@ fn default_model_options() -> ModelOptions {
 }
 
 
-/// Specifies the latency tier to use for processing the request. This parameter is relevant for customers subscribed to the scale tier service:   - If set to 'auto', and the Project is Scale tier enabled, the system     will utilize scale tier credits until they are exhausted.   - If set to 'auto', and the Project is not Scale tier enabled, the request will be processed using the default service tier with a lower uptime SLA and no latency guarentee.   - If set to 'default', the request will be processed using the default service tier with a lower uptime SLA and no latency guarentee.   - If set to 'flex', the request will be processed with the Flex Processing service tier. [Learn more](/docs/guides/flex-processing).   - When not set, the default behavior is 'auto'.    When this parameter is set, the response body will include the `service_tier` utilized. 
+/// Specifies the latency tier to use for processing the request. 
+/// This parameter is relevant for customers subscribed to the scale tier service:   
+/// - If set to 'auto', and the Project is Scale tier enabled, the system     
+///   will utilize scale tier credits until they are exhausted.   
+/// - If set to 'auto', and the Project is not Scale tier enabled,
+///   the request will be processed using the default service tier with a lower uptime SLA and no latency guarentee.   
+/// - If set to 'default', the request will be processed using the default service tier with a lower uptime SLA and no latency guarentee.   
+/// - If set to 'flex', the request will be processed with the Flex Processing service tier. [Learn more](/docs/guides/flex-processing).   
+/// - When not set, the default behavior is 'auto'.
+///   When this parameter is set, the response body will include the `service_tier` utilized. 
 /// Enumeration of values.
 /// Since this enum's variants do not hold data, we can easily define them as `#[repr(C)]`
 /// which helps with FFI.
@@ -268,7 +352,11 @@ pub struct PullRequest {
 
     #[serde(rename = "stream")]
     #[serde(default = "default_stream")]
-    pub stream: bool,
+    pub stream: bool,    
+    
+    #[serde(rename = "insecure")]
+    #[serde(default = "default_insecure")]
+    pub insecure: bool,
 }
 
 /// ProgressResponse is the response passed to progress functions like
@@ -389,22 +477,22 @@ pub struct ListResponse {
 // ListModelResponse is a single model description in [ListResponse].
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ListModelResponse {
-	name:    String,
-	model:    String,
+    pub name: String,
+    pub model: String,
     #[serde(rename = "modified_at")]
     pub modified_at: DateTime<Utc>,
-	pub size :      i64,
-	pub digest :    String,
-	pub details :   ModelDetails,
+    pub size: i64,
+    pub digest: String,
+    pub details: ModelDetails,
 }
 
 /// ModelDetails provides details about a model.
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ModelDetails {
-	parent_model :   String,
-	format :   String,
-	family :    String,
-	families :   Vec<String>,
-	parameter_size :    String,
-	quantization_level:    String,
+    pub parent_model: String,
+    pub format: String,
+    pub family: String,
+    pub families: Vec<String>,
+    pub parameter_size: String,
+    pub quantization_level: String,
 }
