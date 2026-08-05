@@ -40,11 +40,20 @@ pub async fn run(config: &Config, _options: &Args) -> Result<()> {
     }
     
     write::info(format!(
-        "startting server with models path '{:?}'...",
+        "Starting server with models path '{:?}'...",
         config.models_path
     ).yellow())?;
-    let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+
+    // Keep the shutdown sender alive to prevent immediate shutdown.
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    
+    // Wait for Ctrl+C or SIGTERM to trigger shutdown.
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        let _ = shutdown_tx.send(());
+    });
+
     crate::server::run_server(&base_url, std::sync::Arc::new(config.clone()), shutdown_rx).await?;
-    write::info("server started successfully".green())?;
+    write::info("server shut down".green())?;
     Ok(())
 }

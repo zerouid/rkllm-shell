@@ -312,14 +312,63 @@ impl RkllmRuntime {
         Ok(result.0)
     }
 
+    /// Finds the first `.rkllm` file inside a directory.
+    fn find_first_rkllm_file(dir: &Path) -> Option<PathBuf> {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("rkllm") {
+                    return Some(path);
+                }
+            }
+        }
+        None
+    }
+
     fn get_model_path(&self, model: &str) -> String {
         // If `model` already looks like an absolute path, use it directly.
         let p = Path::new(model);
         if p.is_absolute() {
             return model.to_string();
         }
-        // Otherwise resolve relative to models_path.
-        self.models_path.join(model).to_string_lossy().into_owned()
+
+        let base = self.models_path.as_ref();
+
+        // 1. Exact match as a file (models_path / model).
+        let direct = base.join(model);
+        if direct.is_file() {
+            return direct.to_string_lossy().into_owned();
+        }
+
+        // 2. Exact match as a subdirectory that contains an .rkllm file.
+        if direct.is_dir() {
+            if let Some(entry) = Self::find_first_rkllm_file(&direct) {
+                return entry.to_string_lossy().into_owned();
+            }
+        }
+
+        // 3. Recursive search through all subdirectories for an .rkllm file
+        //    whose filename (stem) contains the model name (case-insensitive).
+        if let Ok(entries) = std::fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(rkllm) = Self::find_first_rkllm_file(&path) {
+                        let file_stem = rkllm
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if file_stem.contains(&model.to_lowercase()) {
+                            return rkllm.to_string_lossy().into_owned();
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Fallback: return the direct join (will likely fail at rkllm_init).
+        direct.to_string_lossy().into_owned()
     }
 
     fn parse_request_model_key(request: &CompletionRequest) -> String {

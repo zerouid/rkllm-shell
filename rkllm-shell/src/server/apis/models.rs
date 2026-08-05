@@ -56,6 +56,65 @@ fn sha256_file(path: &std::path::Path) -> Result<String, std::io::Error> {
 }
 
 // ---------------------------------------------------------------------------
+// Recursive .rkllm file collector
+// ---------------------------------------------------------------------------
+
+/// Recursively search for the model file whose name or directory contains the model name.
+fn find_model_file(models_dir: &PathBuf, model_name: &str) -> Option<PathBuf> {
+    let direct = models_dir.join(model_name);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    // Check if model_name is a directory with an .rkllm file inside.
+    if direct.is_dir() {
+        if let Ok(entries) = fs::read_dir(&direct) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("rkllm") {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    // Recursive search for matching name.
+    let mut found = None;
+    let _ = collect_rkllm_files(models_dir, &mut Vec::new())
+        .map(|_| ());
+    // Actually search properly
+    let mut all = Vec::new();
+    if collect_rkllm_files(models_dir, &mut all).is_ok() {
+        for path in all {
+            let file_stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if file_stem.contains(&model_name.to_lowercase()) {
+                found = Some(path);
+                break;
+            }
+        }
+    }
+    found
+}
+
+fn collect_rkllm_files(dir: &PathBuf, files: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rkllm_files(&path, files)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rkllm") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // DELETE /api/delete
 // ---------------------------------------------------------------------------
 
@@ -77,14 +136,13 @@ pub async fn delete_model(
         .models_path
         .clone()
         .unwrap_or_else(|| PathBuf::from("./data"));
-    let model_path = models_dir.join(&request.model);
 
-    if !model_path.exists() {
-        return Err(ApiError::ModelNotFound(format!(
+    // Use find_model_file to support subdirectory models.
+    let model_path = find_model_file(&models_dir, &request.model)
+        .ok_or_else(|| ApiError::ModelNotFound(format!(
             "Model '{}' not found",
             request.model
-        )));
-    }
+        )))?;
 
     fs::remove_file(&model_path)
         .map_err(|e| ApiError::Internal(format!("Failed to delete model: {}", e)))?;
@@ -113,8 +171,8 @@ pub async fn retrieve_model(
 
     let request = ShowRequest {
         model: model_name,
-        system: String::new(),
-        verbose: false,
+        system: Some(String::new()),
+        verbose: Some(false),
         options: ModelOptions {
             num_ctx: default_context_window(),
             repeat_last_n: default_repeat_last_n(),
@@ -159,53 +217,49 @@ pub async fn list_local_models(
 
     let mut models = Vec::new();
 
-    let entries = fs::read_dir(&models_dir)
-        .map_err(|e| ApiError::Internal(format!("Failed to read models directory: {}", e)))?;
+    // Recursively collect all .rkllm files.
+    let mut rkllm_files = Vec::new();
+    collect_rkllm_files(&models_dir, &mut rkllm_files)
+        .map_err(|e| ApiError::Internal(format!("Failed to scan for models: {}", e)))?;
 
-    for entry in entries {
-        let entry = entry
-            .map_err(|e| ApiError::Internal(format!("Failed to read directory entry: {}", e)))?;
-        let path = entry.path();
+    for path in &rkllm_files {
+        let metadata = fs::metadata(path)
+            .map_err(|e| ApiError::Internal(format!("Failed to get file metadata: {}", e)))?;
 
-        if path.extension().and_then(|e| e.to_str()) == Some("rkllm") {
-            let metadata = fs::metadata(&path)
-                .map_err(|e| ApiError::Internal(format!("Failed to get file metadata: {}", e)))?;
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
 
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+            .unwrap_or_else(Utc::now);
 
-            let modified_at = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
-                .unwrap_or_else(Utc::now);
+        let digest = sha256_file(path).unwrap_or_default();
+        let quantization = detect_quantization(&file_name);
 
-            let digest = sha256_file(&path).unwrap_or_default();
-            let quantization = detect_quantization(&file_name);
-
-            models.push(ListModelResponse {
-                name: file_name.clone(),
-                model: file_name.clone(),
-                modified_at,
-                size: metadata.len() as i64,
-                digest,
-                details: ModelDetails {
-                    parent_model: String::new(),
-                    format: "rkllm".to_string(),
-                    family: "rkllm".to_string(),
-                    families: vec!["rkllm".to_string()],
-                    parameter_size: format!(
-                        "{:.2} GB",
-                        metadata.len() as f64 / 1_073_741_824.0
-                    ),
-                    quantization_level: quantization,
-                },
-            });
-        }
+        models.push(ListModelResponse {
+            name: file_name.clone(),
+            model: file_name.clone(),
+            modified_at,
+            size: metadata.len() as i64,
+            digest,
+            details: ModelDetails {
+                parent_model: String::new(),
+                format: "rkllm".to_string(),
+                family: "rkllm".to_string(),
+                families: vec!["rkllm".to_string()],
+                parameter_size: format!(
+                    "{:.2} GB",
+                    metadata.len() as f64 / 1_073_741_824.0
+                ),
+                quantization_level: quantization,
+            },
+        });
     }
 
     Ok(Json(ListResponse { models }))
@@ -275,14 +329,13 @@ pub async fn show_model_info(
         .models_path
         .clone()
         .unwrap_or_else(|| PathBuf::from("./data"));
-    let model_path = models_dir.join(&request.model);
 
-    if !model_path.exists() {
-        return Err(ApiError::ModelNotFound(format!(
+    // Use find_model_file to support subdirectory models.
+    let model_path = find_model_file(&models_dir, &request.model)
+        .ok_or_else(|| ApiError::ModelNotFound(format!(
             "Model '{}' not found",
             request.model
-        )));
-    }
+        )))?;
 
     let metadata = fs::metadata(&model_path)
         .map_err(|e| ApiError::Internal(format!("Failed to get file metadata: {}", e)))?;
@@ -315,7 +368,7 @@ pub async fn show_model_info(
         ),
         template: "<|System|>\n{{ .System }}\n<|User|>\n{{ .Prompt }}\n<|Assistant|>"
             .to_string(),
-        system: request.system,
+        system: request.system.unwrap_or_default(),
         details,
         modified_at,
     }))
@@ -350,7 +403,7 @@ pub async fn pull_model(
             .map_err(|e| ApiError::Internal(format!("Failed to create models directory: {}", e)))?;
     }
 
-    let repo_id = model.model.clone();
+    let repo_id = model.name.clone();
     let dest_dir = models_dir.clone();
 
     // Run the blocking HF download in a spawn_blocking thread.

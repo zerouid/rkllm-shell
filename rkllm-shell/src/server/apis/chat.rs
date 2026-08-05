@@ -152,6 +152,11 @@ pub async fn openai_chat_completions(
     let internal = ChatCompletionRequest {
         model: request.model.clone(),
         messages,
+        stream: request.stream,
+        temperature: request.temperature,
+        top_p: request.top_p,
+        max_tokens: request.max_tokens,
+        keep_alive: request.keep_alive,
         options: ModelOptions {
             temperature: request.temperature,
             top_p: request.top_p,
@@ -164,9 +169,6 @@ pub async fn openai_chat_completions(
             top_k: default_top_k(),
             min_p: default_min_p(),
         },
-        format: None,
-        stream: request.stream,
-        keep_alive: request.keep_alive,
     };
 
     let model = state

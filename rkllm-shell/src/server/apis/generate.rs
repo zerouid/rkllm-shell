@@ -37,8 +37,8 @@ pub async fn generate_completion(
 
     // Build the prompt string, optionally prepending a system message.
     let mut messages = Vec::new();
-    if !request.system.is_empty() {
-        messages.push(format!("<|System|>: {}", request.system));
+    if let Some(ref sys) = request.system {
+        messages.push(format!("<|System|>: {}", sys));
     }
     messages.push(request.prompt.clone());
 
@@ -53,10 +53,14 @@ pub async fn generate_completion(
                 model: model_name.clone(),
                 created_at: Utc::now(),
                 response: token,
-                thinking: String::new(),
-                done_reason: String::new(),
                 done: false,
-                context: vec![],
+                context: None,
+                total_duration: None,
+                load_duration: None,
+                prompt_eval_count: None,
+                prompt_eval_duration: None,
+                eval_count: None,
+                eval_duration: None,
             };
             let data = serde_json::to_string(&chunk).unwrap_or_default();
             Ok::<Event, std::convert::Infallible>(Event::default().data(data))
@@ -68,10 +72,14 @@ pub async fn generate_completion(
                 model: done_model,
                 created_at: Utc::now(),
                 response: String::new(),
-                thinking: String::new(),
-                done_reason: "stop".to_string(),
                 done: true,
-                context: vec![],
+                context: None,
+                total_duration: Some(0),
+                load_duration: Some(0),
+                prompt_eval_count: Some(0),
+                prompt_eval_duration: Some(0),
+                eval_count: Some(0),
+                eval_duration: Some(0),
             };
             let data = serde_json::to_string(&final_chunk).unwrap_or_default();
             Ok::<Event, std::convert::Infallible>(Event::default().data(data))
@@ -89,10 +97,14 @@ pub async fn generate_completion(
             model: request.model.clone(),
             created_at: Utc::now(),
             response: response_text,
-            thinking: String::new(),
-            done_reason: "stop".to_string(),
             done: true,
-            context: vec![],
+            context: None,
+            total_duration: Some(0),
+            load_duration: Some(0),
+            prompt_eval_count: Some(0),
+            prompt_eval_duration: Some(0),
+            eval_count: Some(0),
+            eval_duration: Some(0),
         };
         Ok(Json(response).into_response())
     }
