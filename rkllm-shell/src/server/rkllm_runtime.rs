@@ -3,18 +3,20 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use rkllm_api_sys::{
     rkllm_createDefaultParam, rkllm_destroy, rkllm_init, rkllm_run, rkllm_set_chat_template,
     LLMCallState, LLMCallState_RKLLM_RUN_ERROR, LLMCallState_RKLLM_RUN_FINISH,
     LLMCallState_RKLLM_RUN_NORMAL, LLMCallState_RKLLM_RUN_WAITING, LLMHandle,
-    RKLLMInferMode_RKLLM_INFER_GENERATE, RKLLMInferParam, RKLLMInput,
-    RKLLMInputType_RKLLM_INPUT_PROMPT, RKLLMInput__bindgen_ty_1, RKLLMResult,
+    RKLLMCallback, RKLLMInferMode_RKLLM_INFER_GENERATE, RKLLMInferParam, RKLLMInput,
+    RKLLMInputType_RKLLM_INPUT_PROMPT, RKLLMInputType_RKLLM_INPUT_MULTIMODAL,
+    RKLLMInput__bindgen_ty_1, RKLLMResult, RKLLMMultiModalInput,
 };
 
 use crate::server::api_models::{ChatCompletionRequest, GenerateRequest};
+use crate::server::vision::{VisionEncoder, StubVisionEncoder, VisionEncoderConfig, build_multimodal_input};
 
 pub enum CompletionRequest {
     Generate(GenerateRequest),
@@ -58,9 +60,13 @@ unsafe impl Send for RawHandleSend {}
 // RkllmModel — owns the native handle; destroys it on drop.
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+
 pub struct RkllmModel {
     handle: ThreadSafeLLMHandle,
+    // Vision encoder for multimodal support (optional, created on first use)
+    vision_encoder: OnceLock<Arc<dyn VisionEncoder>>,
+    // Path to the model file (for tracking)
+    model_path: String,
 }
 
 impl Drop for RkllmModel {
@@ -75,6 +81,23 @@ impl Drop for RkllmModel {
 }
 
 impl RkllmModel {
+    /// Creates a new RkllmModel with an optional vision encoder for multimodal support
+    pub fn new(handle: ThreadSafeLLMHandle, model_path: String) -> Self {
+        Self {
+            handle,
+            vision_encoder: OnceLock::new(),
+            model_path,
+        }
+    }
+
+    /// Get or initialize the vision encoder for multimodal support
+    fn vision_encoder(&self) -> Arc<dyn VisionEncoder> {
+        self.vision_encoder.get_or_init(|| {
+            let config = VisionEncoderConfig::default();
+            Arc::new(StubVisionEncoder::new(config))
+        }).clone()
+    }
+
     /// Runs inference in a blocking thread so the tokio executor is never stalled.
     /// Returns an async-compatible receiver that yields token strings.
     pub fn run_inference(
@@ -97,6 +120,8 @@ impl RkllmModel {
 
             let msgs_cstr = CString::new(combined_msg).expect("CString::new failed");
             let mut rkllm_input = RKLLMInput {
+                role: std::ptr::null(),
+                enable_thinking: false,
                 input_type: RKLLMInputType_RKLLM_INPUT_PROMPT,
                 __bindgen_anon_1: RKLLMInput__bindgen_ty_1 {
                     prompt_input: msgs_cstr.as_ptr(),
@@ -107,6 +132,8 @@ impl RkllmModel {
                 keep_history: 0,
                 prompt_cache_params: std::ptr::null_mut(),
                 lora_params: std::ptr::null_mut(),
+                sampling_params: std::ptr::null_mut(),
+                max_new_tokens: -1,
             };
 
             unsafe {
@@ -128,6 +155,70 @@ impl RkllmModel {
             }
             // msgs_cstr kept alive until here (past the rkllm_run call).
             drop(msgs_cstr);
+        });
+
+        rx
+    }
+
+    /// Runs multimodal inference with text prompt and base64-encoded images.
+    /// Returns an async-compatible receiver that yields token strings.
+    pub fn run_multimodal_inference(
+        &self,
+        prompt: String,
+        images_base64: Vec<String>,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Get the vision encoder
+        let vision_encoder = self.vision_encoder();
+
+        // Convert the handle and sender box-pointer to `usize` so the closure
+        // is `Send + 'static` (raw pointers are neither).
+        let handle_usize = self.handle.as_llm_handle() as usize;
+        let tx_ptr_usize = Box::into_raw(Box::new(tx)) as usize;
+
+        tokio::task::spawn_blocking(move || {
+            let handle = handle_usize as LLMHandle;
+            let sender_ptr = tx_ptr_usize as *mut ::std::os::raw::c_void;
+
+            // Build multimodal input using the vision encoder
+            let mut rkllm_input = match build_multimodal_input(&prompt, &images_base64, vision_encoder.as_ref()) {
+                Ok(input) => input,
+                Err(e) => {
+                    eprintln!("Failed to build multimodal input: {}", e);
+                    // Clean up sender on error
+                    unsafe {
+                        let _sender = Box::from_raw(
+                            sender_ptr as *mut tokio::sync::mpsc::UnboundedSender<String>,
+                        );
+                    }
+                    return;
+                }
+            };
+
+            let mut rkllm_infer_params = RKLLMInferParam {
+                mode: RKLLMInferMode_RKLLM_INFER_GENERATE,
+                keep_history: 0,
+                prompt_cache_params: std::ptr::null_mut(),
+                lora_params: std::ptr::null_mut(),
+                sampling_params: std::ptr::null_mut(),
+                max_new_tokens: -1,
+            };
+
+            unsafe {
+                let result = rkllm_run(
+                    handle,
+                    &mut rkllm_input,
+                    &mut rkllm_infer_params,
+                    sender_ptr,
+                );
+
+                if result != 0 {
+                    let _sender = Box::from_raw(
+                        sender_ptr as *mut tokio::sync::mpsc::UnboundedSender<String>,
+                    );
+                }
+            }
         });
 
         rx
@@ -195,9 +286,13 @@ impl RkllmRuntime {
 
         // Cold-path: initialise in a blocking thread.
         let handle = self.init_model_async(request).await?;
-        let model = Arc::new(RkllmModel {
-            handle: ThreadSafeLLMHandle::new(handle),
-        });
+        let model_path = self.get_model_path(
+            match request {
+                CompletionRequest::Generate(r) => &r.model,
+                CompletionRequest::Chat(r) => &r.model,
+            }
+        );
+        let model = Arc::new(RkllmModel::new(ThreadSafeLLMHandle::new(handle), model_path));
 
         let eviction_handle = self.spawn_eviction_task(key.clone(), keep_alive);
 
@@ -276,11 +371,21 @@ impl RkllmRuntime {
                 *mut RKLLMResult,
                 *mut ::std::os::raw::c_void,
                 LLMCallState,
-            ) = RkllmRuntime::llm_result_callback;
+            ) -> i32 = RkllmRuntime::llm_result_callback;
+
+            // Create RKLLMCallback struct with the callback function and userdata
+            let mut callback = RKLLMCallback {
+                result_callback: Some(callback_fn),
+                result_userdata: std::ptr::null_mut(),
+                tokenizer_callback: None,
+                tokenizer_userdata: std::ptr::null_mut(),
+                embed_callback: None,
+                embed_userdata: std::ptr::null_mut(),
+            };
 
             let mut handle: LLMHandle = std::ptr::null_mut();
             let init_result = unsafe {
-                let r = rkllm_init(&mut handle, &mut param, Some(callback_fn));
+                let r = rkllm_init(&mut handle, &mut param, &mut callback);
                 if r == 0 {
                     let sys = CString::new("<|System|>").unwrap();
                     let usr = CString::new("<|User|>").unwrap();
@@ -396,10 +501,10 @@ impl RkllmRuntime {
         result: *mut RKLLMResult,
         userdata: *mut ::std::os::raw::c_void,
         state: LLMCallState,
-    ) {
+    ) -> i32 {
         if userdata.is_null() {
             eprintln!("Error: userdata is null in callback");
-            return;
+            return 0;
         }
 
         let sender_ptr =
@@ -447,13 +552,123 @@ impl RkllmRuntime {
                         as *mut tokio::sync::mpsc::UnboundedSender<String>,
                 );
             }
+            return 1;
         }
+
+        0
     }
 }
 
 // Ensure ModelEntry is not inadvertently made Sync (the raw handle is not).
 // The HashMap is behind Arc<Mutex<…>> so this is fine.
 unsafe impl Send for ModelEntry {}
+
+// ============================================================================
+// ModelRuntime trait implementation for RkllmRuntime
+// ============================================================================
+
+use crate::server::runtime_trait::{ModelHandle, ModelInfo, ModelRuntime};
+use async_trait::async_trait;
+
+/// Wrapper around RkllmModel that implements ModelHandle
+pub struct RkllmModelHandle {
+    inner: Arc<RkllmModel>,
+    keep_alive: Duration,
+    model_key: String,
+    model_path: String,
+}
+
+impl RkllmModelHandle {
+    pub fn new(model: Arc<RkllmModel>, keep_alive: Duration, model_key: String, model_path: String) -> Self {
+        Self {
+            inner: model,
+            keep_alive,
+            model_key,
+            model_path,
+        }
+    }
+}
+
+#[async_trait]
+impl ModelHandle for RkllmModelHandle {
+    fn run_inference(&self, messages: Vec<String>) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+        self.inner.run_inference(messages)
+    }
+
+    fn run_multimodal_inference(
+        &self,
+        prompt: String,
+        images: Vec<String>,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+        self.inner.run_multimodal_inference(prompt, images)
+    }
+
+    fn keep_alive(&self) -> Duration {
+        self.keep_alive
+    }
+
+    fn model_info(&self) -> ModelInfo {
+        ModelInfo {
+            key: self.model_key.clone(),
+            model_path: self.model_path.clone(),
+            quantization: "W4A16".to_string(), // Default quantization
+            size_bytes: 1024 * 1024 * 500,    // Estimated size
+            loaded_at: std::time::SystemTime::now(),
+        }
+    }
+}
+
+#[async_trait]
+impl ModelRuntime for RkllmRuntime {
+    async fn get_or_load_model(&self, request: &CompletionRequest) -> crate::error::Result<Arc<dyn ModelHandle>> {
+        // Use the existing get_request_model method
+        let model = self.get_request_model(request).await.map_err(|e| crate::error::Error::Server(e))?;
+        let key = Self::parse_request_model_key(request);
+        let keep_alive = request.keep_alive();
+        let model_path = self.get_model_path(
+            match request {
+                CompletionRequest::Generate(r) => &r.model,
+                CompletionRequest::Chat(r) => &r.model,
+            }
+        );
+        Ok(Arc::new(RkllmModelHandle::new(model, keep_alive, key, model_path)))
+    }
+
+    async fn list_loaded_models(&self) -> Vec<ModelInfo> {
+        let models = self.running_models.lock().unwrap();
+        models
+            .iter()
+            .map(|(key, entry)| ModelInfo {
+                key: key.clone(),
+                model_path: entry.model.model_path.clone(),
+                quantization: "W4A16".to_string(),
+                size_bytes: 1024 * 1024 * 500,
+                loaded_at: std::time::SystemTime::now(),
+            })
+            .collect()
+    }
+
+    async fn unload_model(&self, model_key: &str) -> crate::error::Result<()> {
+        let mut models = self.running_models.lock().unwrap();
+        if models.remove(model_key).is_some() {
+            Ok(())
+        } else {
+            Err(crate::error::Error::Server(format!("Model not found: {}", model_key)))
+        }
+    }
+
+    fn models_path(&self) -> &std::path::Path {
+        &self.models_path
+    }
+
+    fn loaded_model_count(&self) -> usize {
+        self.running_models.lock().unwrap().len()
+    }
+
+    fn is_model_loaded(&self, model_key: &str) -> bool {
+        self.running_models.lock().unwrap().contains_key(model_key)
+    }
+}
 
 #[cfg(test)]
 #[path = "rkllm_runtime_test.rs"]

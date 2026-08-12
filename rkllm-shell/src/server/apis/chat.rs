@@ -16,9 +16,40 @@ use crate::server::{
         OpenAiChatChunk, OpenAiChatRequest, OpenAiChatResponse, OpenAiChoice, OpenAiDelta,
         OpenAiMessage, OpenAiStreamChoice, OpenAiUsage, Role,
     },
+    api_models::openai::OpenAiContent,
+    api_models::translate::extract_content_and_images,
     rkllm_runtime::CompletionRequest,
     AppState,
 };
+
+// ---------------------------------------------------------------------------
+// Helper: extract images from messages and build prompt
+// ---------------------------------------------------------------------------
+
+/// Extract base64-encoded images from messages
+fn extract_images(messages: &[ChatCompletionRequestMessage]) -> Vec<String> {
+    let mut images = Vec::new();
+    for msg in messages {
+        if let Some(img_vec) = &msg.images {
+            images.extend(img_vec.iter().cloned());
+        }
+    }
+    images
+}
+
+/// Build prompt string from messages (without images)
+fn build_prompt_from_messages(messages: &[ChatCompletionRequestMessage]) -> String {
+    messages
+        .iter()
+        .map(|m| match m.role {
+            Role::System => format!("<|System|>: {}", m.content),
+            Role::User => format!("<|User|>: {}", m.content),
+            Role::Assistant => format!("<|Assistant|>: {}", m.content),
+            _ => m.content.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 // ---------------------------------------------------------------------------
 // Ollama  POST /api/chat
@@ -43,10 +74,19 @@ pub async fn generate_chat_completion(
         .await
         .map_err(|e| axum::response::ErrorResponse::from(e))?;
 
-    let messages = build_ollama_messages(&request.messages);
-    let rx = model.run_inference(messages);
+    // Extract images from messages
+    let images = extract_images(&request.messages);
+    // Build prompt from messages
+    let prompt = build_prompt_from_messages(&request.messages);
     let model_name = request.model.clone();
     let stream_mode = request.stream;
+
+    // Use multimodal inference if images are present
+    let rx = if images.is_empty() {
+        model.run_inference(vec![prompt])
+    } else {
+        model.run_multimodal_inference(prompt, images)
+    };
 
     if stream_mode {
         // Stream one JSON object per token.
@@ -136,15 +176,18 @@ pub async fn openai_chat_completions(
     let messages: Vec<Msg> = request
         .messages
         .iter()
-        .map(|m| Msg {
-            role: match m.role.as_str() {
-                "system" => Role::System,
-                "assistant" => Role::Assistant,
-                _ => Role::User,
-            },
-            content: m.content.clone(),
-            thunking: None,
-            images: None,
+        .map(|m| {
+            let (content, images) = extract_content_and_images(m.content.clone());
+            Msg {
+                role: match m.role.as_str() {
+                    "system" => Role::System,
+                    "assistant" => Role::Assistant,
+                    _ => Role::User,
+                },
+                content,
+                thunking: None,
+                images,
+            }
         })
         .collect();
 
@@ -248,7 +291,7 @@ pub async fn openai_chat_completions(
                 index: 0,
                 message: OpenAiMessage {
                     role: "assistant".to_string(),
-                    content: response_text,
+                    content: OpenAiContent::Text(response_text),
                 },
                 finish_reason: "stop".to_string(),
             }],

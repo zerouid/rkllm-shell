@@ -23,7 +23,8 @@ pub async fn run(config: &Config, options: &Args) -> Result<()> {
     write::info(format!("Pulling model '{}'...", options.model).green())?;
 
     let url = format!("http://{}/api/pull", config.base_url);
-    let body = serde_json::json!({ "model": options.model });
+    // Server expects "name" field (Ollama API compatibility)
+    let body = serde_json::json!({ "name": options.model });
 
     let resp = reqwest::Client::new()
         .post(&url)

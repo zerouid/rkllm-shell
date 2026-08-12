@@ -89,7 +89,7 @@ pub struct ModelDetails {
 // Shared types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, Default)]
 pub struct ModelOptions {
     pub num_ctx: i32,
     pub repeat_last_n: i32,

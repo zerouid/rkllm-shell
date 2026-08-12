@@ -13,7 +13,7 @@ struct FileDownLoad {
 const DOWNLOAD_BASE_URL: &'static str = "https://raw.githubusercontent.com/airockchip/rknn-llm/refs/heads/main/rkllm-runtime/Linux/librkllm_api/";
 const LIBS: [FileDownLoad; 1] = [FileDownLoad {
     src: "aarch64/librkllmrt.so",
-    dst: "vendor/lib/librkllmrt.so",
+    dst: "vendor/lib/aarch64/librkllmrt.so",
 }];
 
 const INCLUDES: [FileDownLoad; 1] = [
@@ -33,7 +33,7 @@ fn main() {
     }
 
     // Tell cargo to look for shared libraries in the specified directory
-    let libdir_path = PathBuf::from("vendor/lib")
+    let libdir_path = PathBuf::from("vendor/lib/aarch64")
         .canonicalize()
         .expect("cannot canonicalize vendor path");
     println!("cargo:rustc-link-search={}", libdir_path.to_str().unwrap());
@@ -54,7 +54,6 @@ fn main() {
             println!("cargo:rustc-link-lib=rkllmrt");
             copy_dylib_to_target_dir("librkllmrt.so");
         }
-        // _ => panic!("Unsupported operating system and/or architecture"),
     }
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes
@@ -87,25 +86,26 @@ fn main() {
 
 fn copy_dylib_to_target_dir(dylib: &str) {
     let out_dir = env::var("OUT_DIR").unwrap();
-    let src = Path::new("vendor/lib");
+    let src = Path::new("vendor/lib/aarch64");
     let dst = Path::new(&out_dir);
     let _ = fs::copy(src.join(dylib), dst.join(dylib));
 }
 
 fn download_image(url: &str, file_path: &str) -> Result<()> {
     let file_path = Path::new(file_path);
-    if !Path::exists(&file_path) {
-        // Send an HTTP GET request to the URL
-        let mut response = reqwest::blocking::get(url)?;
+    // Always download to ensure we have the latest version
+    // Send an HTTP GET request to the URL
+    let mut response = reqwest::blocking::get(url)?;
 
-        // Ensure folder exists
-        fs::create_dir_all(file_path.parent().unwrap())?;
-        // Create a new file to write the downloaded image to
-        let mut file = File::create(file_path)?;
+    // Ensure folder exists
+    fs::create_dir_all(file_path.parent().unwrap())?;
+    // Create a new file to write the downloaded image to
+    let mut file = File::create(file_path)?;
 
-        // Copy the contents of the response to the file
-        copy(&mut response, &mut file)?;
-    }
+    // Copy the contents of the response to the file
+    copy(&mut response, &mut file)?;
+
+    println!("cargo:warning=Downloaded {} to {}", url, file_path.display());
 
     Ok(())
 }

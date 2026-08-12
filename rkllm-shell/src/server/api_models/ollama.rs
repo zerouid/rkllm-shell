@@ -11,7 +11,7 @@ use crate::server::defaults::*;
 // Ollama Chat Completion types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
@@ -67,7 +67,7 @@ pub struct ChatCompletionResponse {
 // Ollama Generate types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, ToSchema)]
 pub struct GenerateRequest {
     pub model: String,
     pub prompt: String,

@@ -1,11 +1,19 @@
 #![allow(unused_variables)]
-mod apis;
+pub mod apis;
 pub mod api_models;
-mod rkllm_runtime;
+pub mod rkllm_runtime;
 mod defaults;
+mod vision;
+pub mod runtime_trait;
+mod mock_runtime;
+mod test_helpers;
+mod test_fixtures;
+pub mod rig_provider;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::sync::{Arc, Mutex};
+use std::{net::SocketAddr, time::Duration};
 
 use axum::{
     routing::{delete, get, post},
@@ -27,16 +35,71 @@ use tokio::{sync::oneshot, time::sleep};
 use crate::config::Config;
 use crate::error::Result;
 use crate::server::api_models::*;
+use crate::server::rig_provider::RkllmClient;
 use utoipa::OpenApi;
 
 // ---------------------------------------------------------------------------
 // Shared application state — accessible by all axum handlers via State<…>
 // ---------------------------------------------------------------------------
 
+/// Simple in-memory cache for model file digests
+#[derive(Clone, Default)]
+struct DigestCache(Arc<Mutex<HashMap<PathBuf, String>>>);
+
+impl DigestCache {
+    async fn get_or_compute(&self, path: &PathBuf) -> String {
+        // Check cache first
+        {
+            let cache = self.0.lock().unwrap();
+            if let Some(digest) = cache.get(path) {
+                return digest.clone();
+            }
+        }
+        
+        // Compute digest (this is slow for large files, but we only do it once per file)
+        let result = crate::server::apis::models::sha256_file_async(path.clone()).await.unwrap_or_default();
+        
+        // Store in cache
+        {
+            let mut cache = self.0.lock().unwrap();
+            cache.insert(path.clone(), result.clone());
+        }
+        
+        result
+    }
+    
+    /// Pre-compute digests for multiple files concurrently (available for future use)
+    async fn precompute_all(&self, paths: &[PathBuf]) {
+        let mut futures = Vec::new();
+        for path in paths {
+            // Check if already cached
+            let needs_compute = {
+                let cache = self.0.lock().unwrap();
+                !cache.contains_key(path)
+            };
+            
+            if needs_compute {
+                let path_clone = path.clone();
+                let cache_clone = self.clone();
+                futures.push(async move {
+                    let result = crate::server::apis::models::sha256_file_async(path_clone.clone()).await.unwrap_or_default();
+                    let mut cache = cache_clone.0.lock().unwrap();
+                    cache.insert(path_clone, result);
+                });
+            }
+        }
+        
+        // Run all digest computations concurrently
+        futures::future::join_all(futures).await;
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub runtime: RkllmRuntime,
     pub config: Arc<Config>,
+    pub digest_cache: DigestCache,
+    pub rig_client: RkllmClient,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +174,14 @@ pub async fn run_server(
     }
 
     let runtime = RkllmRuntime::new(models_path);
-    let state = AppState { runtime, config };
+    let runtime_arc = Arc::new(runtime);
+    let rig_client = RkllmClient::new(runtime_arc.clone());
+    let state = AppState { 
+        runtime: (*runtime_arc).clone(), 
+        config,
+        digest_cache: DigestCache::default(),
+        rig_client,
+    };
 
     let openapi = ApiDoc::openapi();
     let app = Router::new()
@@ -124,6 +194,9 @@ pub async fn run_server(
         .route("/api/delete", delete(delete_model))
         .route("/api/ps", get(list_running_models))
         .route("/api/pull", post(pull_model))
+        // Agent API endpoints
+        .route("/api/agent/chat", post(apis::agent::agent_chat))
+        .route("/api/agent/stream", post(apis::agent::agent_stream))
         // OpenAI-compatible endpoints
         .route("/v1/models", get(list_local_models))
         .route("/v1/models/{model}", get(retrieve_model))

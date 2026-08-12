@@ -26,9 +26,32 @@ pub enum ServiceTier {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[serde(untagged)]
+pub enum OpenAiContent {
+    Text(String),
+    Array(Vec<OpenAiContentPart>),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[serde(tag = "type")]
+pub enum OpenAiContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: OpenAiImageUrl },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub struct OpenAiImageUrl {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct OpenAiMessage {
     pub role: String,
-    pub content: String,
+    pub content: OpenAiContent,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]

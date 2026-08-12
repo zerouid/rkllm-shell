@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::server::api_models::{
     ollama::{ChatCompletionRequest as OllamaChatRequest, ChatCompletionRequestMessage as OllamaMessage, ChatCompletionResponse as OllamaChatResponse, GenerateRequest as OllamaGenerateRequest, GenerateResponse as OllamaGenerateResponse, EmbedRequest as OllamaEmbedRequest, EmbedResponse as OllamaEmbedResponse, Role},
-    openai::{OpenAiChatRequest, OpenAiChatResponse, OpenAiChatChunk, OpenAiStreamChoice, OpenAiDelta, OpenAiChoice, OpenAiUsage, OpenAiMessage},
+    openai::{OpenAiChatRequest, OpenAiChatResponse, OpenAiChatChunk, OpenAiStreamChoice, OpenAiDelta, OpenAiChoice, OpenAiUsage, OpenAiMessage, OpenAiContent, OpenAiContentPart, OpenAiImageUrl},
 };
 
 /// Convert OpenAI Chat Request to Ollama Chat Request
@@ -14,16 +14,19 @@ impl From<OpenAiChatRequest> for OllamaChatRequest {
         let messages: Vec<OllamaMessage> = req
             .messages
             .into_iter()
-            .map(|m| OllamaMessage {
-                role: match m.role.as_str() {
-                    "system" => Role::System,
-                    "user" => Role::User,
-                    "assistant" => Role::Assistant,
-                    _ => Role::User,
-                },
-                content: m.content,
-                thunking: None,
-                images: None,
+            .map(|m| {
+                let (content, images) = extract_content_and_images(m.content);
+                OllamaMessage {
+                    role: match m.role.as_str() {
+                        "system" => Role::System,
+                        "user" => Role::User,
+                        "assistant" => Role::Assistant,
+                        _ => Role::User,
+                    },
+                    content,
+                    thunking: None,
+                    images,
+                }
             })
             .collect();
 
@@ -36,6 +39,40 @@ impl From<OpenAiChatRequest> for OllamaChatRequest {
             max_tokens: req.max_tokens,
             keep_alive: req.keep_alive,
             options: crate::server::defaults::default_model_options(),
+        }
+    }
+}
+
+/// Extract text content and base64 images from OpenAI content
+pub fn extract_content_and_images(content: OpenAiContent) -> (String, Option<Vec<String>>) {
+    match content {
+        OpenAiContent::Text(text) => (text, None),
+        OpenAiContent::Array(parts) => {
+            let mut text_parts = Vec::new();
+            let mut images = Vec::new();
+            for part in parts {
+                match part {
+                    OpenAiContentPart::Text { text } => text_parts.push(text),
+                    OpenAiContentPart::ImageUrl { image_url } => {
+                        // Extract base64 from data URL or use as-is if it's already base64
+                        let base64 = if image_url.url.starts_with("data:") {
+                            // data:image/png;base64,xxx
+                            image_url.url.split(',').nth(1).unwrap_or("").to_string()
+                        } else {
+                            image_url.url
+                        };
+                        if !base64.is_empty() {
+                            images.push(base64);
+                        }
+                    }
+                }
+            }
+            let combined_text = text_parts.join("\n");
+            if images.is_empty() {
+                (combined_text, None)
+            } else {
+                (combined_text, Some(images))
+            }
         }
     }
 }
@@ -53,7 +90,7 @@ impl From<OllamaChatResponse> for OpenAiChatResponse {
                 index: 0,
                 message: OpenAiMessage {
                     role: format!("{:?}", resp.message.role).to_lowercase(),
-                    content: resp.message.content,
+                    content: OpenAiContent::Text(resp.message.content),
                 },
                 finish_reason: if resp.done { "stop" } else { "length" }.to_string(),
             }],
@@ -112,7 +149,7 @@ impl From<OllamaGenerateRequest> for OpenAiChatRequest {
             model: req.model,
             messages: vec![OpenAiMessage {
                 role: "user".to_string(),
-                content: req.prompt,
+                content: OpenAiContent::Text(req.prompt),
             }],
             stream: req.stream,
             temperature: req.temperature,

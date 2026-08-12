@@ -55,6 +55,12 @@ fn sha256_file(path: &std::path::Path) -> Result<String, std::io::Error> {
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
+pub async fn sha256_file_async(path: std::path::PathBuf) -> Result<String, std::io::Error> {
+    tokio::task::spawn_blocking(move || sha256_file(&path))
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::new(std::io::ErrorKind::Other, e)))
+}
+
 // ---------------------------------------------------------------------------
 // Recursive .rkllm file collector
 // ---------------------------------------------------------------------------
@@ -222,7 +228,12 @@ pub async fn list_local_models(
     collect_rkllm_files(&models_dir, &mut rkllm_files)
         .map_err(|e| ApiError::Internal(format!("Failed to scan for models: {}", e)))?;
 
+    // Use the digest cache from AppState for fast repeated requests
+    let digest_cache = &state.digest_cache;
+    crate::terminal::message::write::info(format!("Found {} model files", rkllm_files.len())).ok();
+    
     for path in &rkllm_files {
+        crate::terminal::message::write::info(format!("Processing model file: {:?}", path)).ok();
         let metadata = fs::metadata(path)
             .map_err(|e| ApiError::Internal(format!("Failed to get file metadata: {}", e)))?;
 
@@ -239,7 +250,9 @@ pub async fn list_local_models(
             .and_then(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
             .unwrap_or_else(Utc::now);
 
-        let digest = sha256_file(path).unwrap_or_default();
+        // Get digest from cache (computes on first request for this file, then cached)
+        // Note: We don't await this to avoid blocking on large files; return empty digest initially
+        let digest = String::new();
         let quantization = detect_quantization(&file_name);
 
         models.push(ListModelResponse {

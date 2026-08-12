@@ -26,6 +26,7 @@ pub mod ps;
 pub mod cp;
 pub mod rm;
 pub mod info;
+pub mod agent;
 
 /*
 Ollama CLI
@@ -58,6 +59,7 @@ pub enum Command {
     Ps(ps::Args),
     Cp(cp::Args),
     Rm(rm::Args),
+    Agent(agent::Args),
 }
 
 impl Command {
@@ -84,6 +86,7 @@ impl Command {
             Command::Ps(args) => ps::run(config, &args).await,
             Command::Cp(args) => cp::run(config, &args).await,
             Command::Rm(args) => rm::run(config, &args).await,
+            Command::Agent(args) => agent::run(config, &args).await,
         }
     }
 }

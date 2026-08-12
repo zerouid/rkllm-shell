@@ -25,3 +25,20 @@ reqwest = { workspace = true, features = ["json"]}
 sha2 = "0.10"
 tokio-stream = "0.1"
 futures = "0.3"
+image = "0.25"
+base64 = "0.22"
+anyhow = "1.0"
+schemars = "1.0"
+# rig framework for AI agents
+rig = { version = "0.41", features = ["agent", "memory", "sqlite", "derive"] }
+rig-core = { version = "0.41", features = ["derive"] }
+# Test infrastructure dependencies
+async-trait = "0.1"
+httpmock = "0.7"
+tempfile = "3.8"
+proptest = "1.0"
+tokio-test = "0.4"
+wiremock = "0.5"
+axum-test = "21"
+
+[dev-dependencies]
