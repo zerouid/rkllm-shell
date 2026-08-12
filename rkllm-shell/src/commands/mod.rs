@@ -18,6 +18,7 @@ pub mod create;
 pub mod show;
 pub mod run;
 pub mod stop;
+pub mod quit;
 pub mod pull;
 pub mod push;
 pub mod list;
@@ -25,6 +26,7 @@ pub mod ps;
 pub mod cp;
 pub mod rm;
 pub mod info;
+pub mod agent;
 
 /*
 Ollama CLI
@@ -50,12 +52,14 @@ pub enum Command {
     Create(create::Args),
     Run(run::Args),
     Stop(stop::Args),
+    Quit(quit::Args),
     Pull(pull::Args),
     Push(push::Args),
     List(list::Args),
     Ps(ps::Args),
     Cp(cp::Args),
     Rm(rm::Args),
+    Agent(agent::Args),
 }
 
 impl Command {
@@ -75,12 +79,14 @@ impl Command {
                 sleep(Duration::from_millis(100)).await;
                 Ok(())
              },
+            Command::Quit(args) => quit::run(config, &args).await,
             Command::Pull(args) => pull::run(config, &args).await,
             Command::Push(args) => push::run(config, &args).await,
             Command::List(args) => list::run(config, &args).await,
             Command::Ps(args) => ps::run(config, &args).await,
             Command::Cp(args) => cp::run(config, &args).await,
             Command::Rm(args) => rm::run(config, &args).await,
+            Command::Agent(args) => agent::run(config, &args).await,
         }
     }
 }
@@ -107,6 +113,7 @@ pub async fn run_repl(config: &crate::config::Config, shutdown_tx: oneshot::Send
             ReadCommandOutput::Command(args) => {
                 if let Some(cmd) = args.command {
                     let is_stop_command = matches!(cmd, Command::Stop(_));
+                    let is_quit_command = matches!(cmd, Command::Quit(_));
                     let tx = if is_stop_command {
                             shutdown_tx.lock().unwrap().take()
                     } else {
@@ -117,7 +124,7 @@ pub async fn run_repl(config: &crate::config::Config, shutdown_tx: oneshot::Send
                         println!("Error executing command: {}", e);
                     }
 
-                    if is_stop_command {
+                    if is_stop_command || is_quit_command {
                         break;
                     }
                 }

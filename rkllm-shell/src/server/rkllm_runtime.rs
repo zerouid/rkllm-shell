@@ -2,17 +2,39 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::{mpsc, Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
-use rkllm_api_sys::{rkllm_createDefaultParam, rkllm_init, rkllm_run, rkllm_set_chat_template, LLMCallState, LLMCallState_RKLLM_RUN_ERROR, LLMCallState_RKLLM_RUN_FINISH, LLMCallState_RKLLM_RUN_NORMAL, LLMCallState_RKLLM_RUN_WAITING, LLMHandle, RKLLMInferMode_RKLLM_INFER_GENERATE, RKLLMInferParam, RKLLMInput, RKLLMInputType_RKLLM_INPUT_PROMPT, RKLLMInput__bindgen_ty_1, RKLLMResult};
+use rkllm_api_sys::{
+    rkllm_createDefaultParam, rkllm_destroy, rkllm_init, rkllm_run, rkllm_set_chat_template,
+    LLMCallState, LLMCallState_RKLLM_RUN_ERROR, LLMCallState_RKLLM_RUN_FINISH,
+    LLMCallState_RKLLM_RUN_NORMAL, LLMCallState_RKLLM_RUN_WAITING, LLMHandle,
+    RKLLMCallback, RKLLMInferMode_RKLLM_INFER_GENERATE, RKLLMInferParam, RKLLMInput,
+    RKLLMInputType_RKLLM_INPUT_PROMPT, RKLLMInputType_RKLLM_INPUT_MULTIMODAL,
+    RKLLMInput__bindgen_ty_1, RKLLMResult, RKLLMMultiModalInput,
+};
 
-use  crate::server::api_models::{ChatCompletionRequest, GenerateRequest};
+use crate::server::api_models::{ChatCompletionRequest, GenerateRequest};
+use crate::server::vision::{VisionEncoder, StubVisionEncoder, VisionEncoderConfig, build_multimodal_input};
 
 pub enum CompletionRequest {
     Generate(GenerateRequest),
     Chat(ChatCompletionRequest),
 }
+
+impl CompletionRequest {
+    pub fn keep_alive(&self) -> Duration {
+        match self {
+            CompletionRequest::Generate(r) => r.keep_alive,
+            CompletionRequest::Chat(r) => r.keep_alive,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Thread-safe wrapper around the raw LLMHandle pointer
+// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub struct ThreadSafeLLMHandle(LLMHandle);
@@ -24,241 +46,630 @@ impl ThreadSafeLLMHandle {
     pub fn new(handle: LLMHandle) -> Self {
         ThreadSafeLLMHandle(handle)
     }
-    
+
     pub fn as_llm_handle(&self) -> LLMHandle {
         self.0
     }
 }
 
+// Used to move an LLMHandle across thread boundaries inside spawn_blocking closures.
+struct RawHandleSend(LLMHandle);
+unsafe impl Send for RawHandleSend {}
 
-#[derive(Debug)]
+// ---------------------------------------------------------------------------
+// RkllmModel — owns the native handle; destroys it on drop.
+// ---------------------------------------------------------------------------
+
+
 pub struct RkllmModel {
-    // Wrap the unsafe pointer in a thread-safe container
     handle: ThreadSafeLLMHandle,
+    // Vision encoder for multimodal support (optional, created on first use)
+    vision_encoder: OnceLock<Arc<dyn VisionEncoder>>,
+    // Path to the model file (for tracking)
+    model_path: String,
+}
+
+impl Drop for RkllmModel {
+    fn drop(&mut self) {
+        let h = self.handle.as_llm_handle();
+        if !h.is_null() {
+            unsafe {
+                rkllm_destroy(h);
+            }
+        }
+    }
 }
 
 impl RkllmModel {
-    pub fn run_inference(&self, messages: Vec<String>) -> Result<Receiver<String>, String> {
-        let combined_msg = messages.join("\n");
-        // let truncated_msg = if combined_msg.len() > 1000 { // Rough character limit
-        //     format!("{}...", &combined_msg[..1000])
-        // } else {
-        //     combined_msg
-        // };
-        
-        let msgs_cstr = CString::new(combined_msg).expect("CString::new failed");
-        let mut rkllm_input = RKLLMInput {
-            input_type: RKLLMInputType_RKLLM_INPUT_PROMPT,
-            __bindgen_anon_1: RKLLMInput__bindgen_ty_1 { 
-                prompt_input: msgs_cstr.as_ptr()
-            },  
-        };
-        let mut rkllm_infer_params = RKLLMInferParam {
-            mode: RKLLMInferMode_RKLLM_INFER_GENERATE,
-            keep_history: 0,
-            prompt_cache_params: std::ptr::null_mut(),
-            lora_params: std::ptr::null_mut(),
-        };
-        
-        let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
-        let sender_ptr = Box::into_raw(Box::new(tx)) as *mut ::std::os::raw::c_void;
-        
-        unsafe { 
-            let result = rkllm_run(
-                self.handle.as_llm_handle(), 
-                &mut rkllm_input, 
-                &mut rkllm_infer_params, 
-                sender_ptr
-            );
-            
-            if result != 0 {
-                // Clean up the sender if call failed
-                let _sender = Box::from_raw(sender_ptr as *mut Sender<String>);
-                return Err(format!("rkllm_run failed with code: {}", result));
-            }
+    /// Creates a new RkllmModel with an optional vision encoder for multimodal support
+    pub fn new(handle: ThreadSafeLLMHandle, model_path: String) -> Self {
+        Self {
+            handle,
+            vision_encoder: OnceLock::new(),
+            model_path,
         }
-        
-        // Keep CString alive until after the call
-        std::mem::forget(msgs_cstr);
-        
-        Ok(rx)
+    }
+
+    /// Get or initialize the vision encoder for multimodal support
+    fn vision_encoder(&self) -> Arc<dyn VisionEncoder> {
+        self.vision_encoder.get_or_init(|| {
+            let config = VisionEncoderConfig::default();
+            Arc::new(StubVisionEncoder::new(config))
+        }).clone()
+    }
+
+    /// Runs inference in a blocking thread so the tokio executor is never stalled.
+    /// Returns an async-compatible receiver that yields token strings.
+    pub fn run_inference(
+        &self,
+        messages: Vec<String>,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+        let combined_msg = messages.join("\n");
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Convert the handle and sender box-pointer to `usize` so the closure
+        // is `Send + 'static` (raw pointers are neither).
+        let handle_usize = self.handle.as_llm_handle() as usize;
+        // Box the sender and capture its address as usize.
+        let tx_ptr_usize = Box::into_raw(Box::new(tx)) as usize;
+
+        tokio::task::spawn_blocking(move || {
+            // Restore typed pointers inside the blocking thread.
+            let handle = handle_usize as LLMHandle;
+            let sender_ptr = tx_ptr_usize as *mut ::std::os::raw::c_void;
+
+            let msgs_cstr = CString::new(combined_msg).expect("CString::new failed");
+            let mut rkllm_input = RKLLMInput {
+                role: std::ptr::null(),
+                enable_thinking: false,
+                input_type: RKLLMInputType_RKLLM_INPUT_PROMPT,
+                __bindgen_anon_1: RKLLMInput__bindgen_ty_1 {
+                    prompt_input: msgs_cstr.as_ptr(),
+                },
+            };
+            let mut rkllm_infer_params = RKLLMInferParam {
+                mode: RKLLMInferMode_RKLLM_INFER_GENERATE,
+                keep_history: 0,
+                prompt_cache_params: std::ptr::null_mut(),
+                lora_params: std::ptr::null_mut(),
+                sampling_params: std::ptr::null_mut(),
+                max_new_tokens: -1,
+            };
+
+            unsafe {
+                let result = rkllm_run(
+                    handle,
+                    &mut rkllm_input,
+                    &mut rkllm_infer_params,
+                    sender_ptr,
+                );
+
+                if result != 0 {
+                    // Clean up sender — dropping it closes the channel so the
+                    // receiver sees EOF.
+                    let _sender = Box::from_raw(
+                        sender_ptr
+                            as *mut tokio::sync::mpsc::UnboundedSender<String>,
+                    );
+                }
+            }
+            // msgs_cstr kept alive until here (past the rkllm_run call).
+            drop(msgs_cstr);
+        });
+
+        rx
+    }
+
+    /// Runs multimodal inference with text prompt and base64-encoded images.
+    /// Returns an async-compatible receiver that yields token strings.
+    pub fn run_multimodal_inference(
+        &self,
+        prompt: String,
+        images_base64: Vec<String>,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Get the vision encoder
+        let vision_encoder = self.vision_encoder();
+
+        // Convert the handle and sender box-pointer to `usize` so the closure
+        // is `Send + 'static` (raw pointers are neither).
+        let handle_usize = self.handle.as_llm_handle() as usize;
+        let tx_ptr_usize = Box::into_raw(Box::new(tx)) as usize;
+
+        tokio::task::spawn_blocking(move || {
+            let handle = handle_usize as LLMHandle;
+            let sender_ptr = tx_ptr_usize as *mut ::std::os::raw::c_void;
+
+            // Build multimodal input using the vision encoder
+            let mut rkllm_input = match build_multimodal_input(&prompt, &images_base64, vision_encoder.as_ref()) {
+                Ok(input) => input,
+                Err(e) => {
+                    eprintln!("Failed to build multimodal input: {}", e);
+                    // Clean up sender on error
+                    unsafe {
+                        let _sender = Box::from_raw(
+                            sender_ptr as *mut tokio::sync::mpsc::UnboundedSender<String>,
+                        );
+                    }
+                    return;
+                }
+            };
+
+            let mut rkllm_infer_params = RKLLMInferParam {
+                mode: RKLLMInferMode_RKLLM_INFER_GENERATE,
+                keep_history: 0,
+                prompt_cache_params: std::ptr::null_mut(),
+                lora_params: std::ptr::null_mut(),
+                sampling_params: std::ptr::null_mut(),
+                max_new_tokens: -1,
+            };
+
+            unsafe {
+                let result = rkllm_run(
+                    handle,
+                    &mut rkllm_input,
+                    &mut rkllm_infer_params,
+                    sender_ptr,
+                );
+
+                if result != 0 {
+                    let _sender = Box::from_raw(
+                        sender_ptr as *mut tokio::sync::mpsc::UnboundedSender<String>,
+                    );
+                }
+            }
+        });
+
+        rx
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RkllmRuntime {
-    running_models: Arc<Mutex<HashMap<String, Arc<RkllmModel>>>>,
+// ---------------------------------------------------------------------------
+// Per-entry metadata kept alongside the Arc<RkllmModel>
+// ---------------------------------------------------------------------------
+
+struct ModelEntry {
+    // Note: AbortHandle implements Debug; RkllmModel implements Debug.
+    model: Arc<RkllmModel>,
+    eviction_handle: tokio::task::AbortHandle,
 }
 
+// ---------------------------------------------------------------------------
+// RkllmRuntime — manages loaded models and their lifecycle.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub struct RkllmRuntime {
+    running_models: Arc<Mutex<HashMap<String, ModelEntry>>>,
+    models_path: Arc<PathBuf>,
+}
 
 impl RkllmRuntime {
-    pub fn new() -> Self {
+    pub fn new(models_path: PathBuf) -> Self {
         RkllmRuntime {
             running_models: Arc::new(Mutex::new(HashMap::new())),
+            models_path: Arc::new(models_path),
         }
     }
 
-    pub fn get_request_model(&self, request: &CompletionRequest) -> Result<Arc<RkllmModel>, String> {
-        let key = Self::parse_request_model_key(&request);
-        
-        let mut models = self.running_models.lock().unwrap();
-        
-        let m = models.entry(key).or_insert_with(|| {
-            let h = self.init_model(&request).expect("Failed to initialize model" );
-            Arc::new(RkllmModel {
-                handle: ThreadSafeLLMHandle::new(h),
-            })
-        }).clone();
-        Ok(m)
+    pub fn list_running_models(&self) -> Vec<String> {
+        let models = self.running_models.lock().unwrap();
+        // Return only the base model name (first component of the composite key)
+        models
+            .keys()
+            .filter_map(|k| k.splitn(2, '-').next().map(str::to_string))
+            .collect()
     }
 
-    fn init_model(&self, request: &CompletionRequest) -> Result<LLMHandle, String> {
-        let (model, options) = match request {
-            CompletionRequest::Generate(req) => (&req.model, &req.options),
-            CompletionRequest::Chat(req) => (&req.model, &req.options)
-        };
-        let mut param = unsafe { rkllm_createDefaultParam() };
-        let model_path = self.get_model_path(model);
-        let model_path_cstr = CString::new(model_path).expect("CString::new failed");
-        param.model_path = model_path_cstr.as_ptr();
-        param.top_k = options.top_k;
-        param.top_p = options.top_p;
-        param.temperature = options.temperature;
-        param.repeat_penalty = options.repeat_penalty;
-        param.frequency_penalty = 0.0;
-        param.presence_penalty = 0.0;
+    /// Returns (or lazily initialises) the model for the given request, then
+    /// resets its keep-alive eviction timer.
+    pub async fn get_request_model(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<Arc<RkllmModel>, String> {
+        let key = Self::parse_request_model_key(request);
+        let keep_alive = request.keep_alive();
 
-        param.max_new_tokens = options.num_predict;
-        // Fix: Use model's actual context limit instead of user request
-        param.max_context_len = options.num_ctx; // Match model's actual limit
-        param.skip_special_token = true;
-        param.extend_param.base_domain_id = 0;
-        param.extend_param.embed_flash = 1;
-        
-        let mut handle: LLMHandle = std::ptr::null_mut();
-        
-        // Fix: Create callback function pointer
-        let callback_fn: unsafe extern "C" fn(*mut RKLLMResult, *mut ::std::os::raw::c_void, LLMCallState) = Self::llm_result_callback;
-        
-        unsafe { 
-            let result = rkllm_init(&mut handle, &mut param, Some(callback_fn));
-            if result != 0 {
-                return Err(format!("Failed to initialize RKLLM model: error code {}", result));
+        // Fast-path: already loaded.
+        {
+            let mut models = self.running_models.lock().unwrap();
+            if let Some(entry) = models.get_mut(&key) {
+                // Reset eviction timer.
+                entry.eviction_handle.abort();
+                let eviction_handle =
+                    self.spawn_eviction_task(key.clone(), keep_alive);
+                entry.eviction_handle = eviction_handle;
+                return Ok(entry.model.clone());
             }
-            
-            // Fix: Use consistent ASCII characters for templates
-            let system_template = CString::new("<|System|>").unwrap();
-            let user_template = CString::new("<|User|>").unwrap();
-            let assistant_template = CString::new("<|Assistant|>").unwrap();
-            
-            rkllm_set_chat_template(
-                handle, 
-                system_template.as_ptr(),
-                user_template.as_ptr(), 
-                assistant_template.as_ptr()
-            );
         }
-        
-        // Keep CStrings alive until after C calls
-        std::mem::forget(model_path_cstr);
-        
-        Ok(handle)
+
+        // Cold-path: initialise in a blocking thread.
+        let handle = self.init_model_async(request).await?;
+        let model_path = self.get_model_path(
+            match request {
+                CompletionRequest::Generate(r) => &r.model,
+                CompletionRequest::Chat(r) => &r.model,
+            }
+        );
+        let model = Arc::new(RkllmModel::new(ThreadSafeLLMHandle::new(handle), model_path));
+
+        let eviction_handle = self.spawn_eviction_task(key.clone(), keep_alive);
+
+        {
+            let mut models = self.running_models.lock().unwrap();
+            // Another concurrent request might have beaten us — keep the winner.
+            models.entry(key).or_insert(ModelEntry {
+                model: model.clone(),
+                eviction_handle,
+            });
+        }
+
+        Ok(model)
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    fn spawn_eviction_task(
+        &self,
+        key: String,
+        duration: Duration,
+    ) -> tokio::task::AbortHandle {
+        let map = self.running_models.clone();
+        let join = tokio::spawn(async move {
+            tokio::time::sleep(duration).await;
+            let mut models = map.lock().unwrap();
+            if let Some(entry) = models.remove(&key) {
+                // Arc<RkllmModel> is dropped here → Drop calls rkllm_destroy
+                // (unless another caller still holds a clone).
+                drop(entry);
+            }
+        });
+        join.abort_handle()
+    }
+
+    /// Runs `rkllm_init` in a blocking thread so the tokio executor is not
+    /// stalled by the (potentially long) model-loading operation.
+    async fn init_model_async(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<LLMHandle, String> {
+        let (model_name, options) = match request {
+            CompletionRequest::Generate(r) => (&r.model, &r.options),
+            CompletionRequest::Chat(r) => (&r.model, &r.options),
+        };
+
+        let model_path = self.get_model_path(model_name);
+        let top_k = options.top_k;
+        let top_p = options.top_p;
+        let temperature = options.temperature;
+        let repeat_penalty = options.repeat_penalty;
+        let max_new_tokens = options.num_predict;
+        let max_context_len = options.num_ctx;
+
+        let result = tokio::task::spawn_blocking(move || {
+            let model_path_cstr =
+                CString::new(model_path).expect("CString::new failed");
+
+            let mut param = unsafe { rkllm_createDefaultParam() };
+            param.model_path = model_path_cstr.as_ptr();
+            param.top_k = top_k;
+            param.top_p = top_p;
+            param.temperature = temperature;
+            param.repeat_penalty = repeat_penalty;
+            param.frequency_penalty = 0.0;
+            param.presence_penalty = 0.0;
+            param.max_new_tokens = max_new_tokens;
+            param.max_context_len = max_context_len;
+            param.skip_special_token = true;
+            param.extend_param.base_domain_id = 0;
+            param.extend_param.embed_flash = 1;
+
+            let callback_fn: unsafe extern "C" fn(
+                *mut RKLLMResult,
+                *mut ::std::os::raw::c_void,
+                LLMCallState,
+            ) -> i32 = RkllmRuntime::llm_result_callback;
+
+            // Create RKLLMCallback struct with the callback function and userdata
+            let mut callback = RKLLMCallback {
+                result_callback: Some(callback_fn),
+                result_userdata: std::ptr::null_mut(),
+                tokenizer_callback: None,
+                tokenizer_userdata: std::ptr::null_mut(),
+                embed_callback: None,
+                embed_userdata: std::ptr::null_mut(),
+            };
+
+            let mut handle: LLMHandle = std::ptr::null_mut();
+            let init_result = unsafe {
+                let r = rkllm_init(&mut handle, &mut param, &mut callback);
+                if r == 0 {
+                    let sys = CString::new("<|System|>").unwrap();
+                    let usr = CString::new("<|User|>").unwrap();
+                    let ast = CString::new("<|Assistant|>").unwrap();
+                    rkllm_set_chat_template(
+                        handle,
+                        sys.as_ptr(),
+                        usr.as_ptr(),
+                        ast.as_ptr(),
+                    );
+                }
+                r
+            };
+
+            // Keep model_path_cstr alive past the C calls.
+            drop(model_path_cstr);
+
+            if init_result != 0 {
+                return Err(format!(
+                    "Failed to initialize RKLLM model: error code {}",
+                    init_result
+                ));
+            }
+            Ok(RawHandleSend(handle))
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking panicked: {}", e))??;
+
+        Ok(result.0)
+    }
+
+    /// Finds the first `.rkllm` file inside a directory.
+    fn find_first_rkllm_file(dir: &Path) -> Option<PathBuf> {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("rkllm") {
+                    return Some(path);
+                }
+            }
+        }
+        None
     }
 
     fn get_model_path(&self, model: &str) -> String {
-        // This function should return the path to the model based on the model name
-        // For now, we will just return a placeholder path
-        // format!("/path/to/models/{}", model)
-        "/home/vanko/models/DeepSeek-R1-Distill-Qwen-1.5B_W8A8_RK3588.rkllm".to_string()
+        // If `model` already looks like an absolute path, use it directly.
+        let p = Path::new(model);
+        if p.is_absolute() {
+            return model.to_string();
+        }
+
+        let base = self.models_path.as_ref();
+
+        // 1. Exact match as a file (models_path / model).
+        let direct = base.join(model);
+        if direct.is_file() {
+            return direct.to_string_lossy().into_owned();
+        }
+
+        // 2. Exact match as a subdirectory that contains an .rkllm file.
+        if direct.is_dir() {
+            if let Some(entry) = Self::find_first_rkllm_file(&direct) {
+                return entry.to_string_lossy().into_owned();
+            }
+        }
+
+        // 3. Recursive search through all subdirectories for an .rkllm file
+        //    whose filename (stem) contains the model name (case-insensitive).
+        if let Ok(entries) = std::fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(rkllm) = Self::find_first_rkllm_file(&path) {
+                        let file_stem = rkllm
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if file_stem.contains(&model.to_lowercase()) {
+                            return rkllm.to_string_lossy().into_owned();
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Fallback: return the direct join (will likely fail at rkllm_init).
+        direct.to_string_lossy().into_owned()
     }
 
     fn parse_request_model_key(request: &CompletionRequest) -> String {
         let (model, options) = match request {
             CompletionRequest::Generate(req) => (&req.model, &req.options),
-            CompletionRequest::Chat(req) => (&req.model, &req.options)
+            CompletionRequest::Chat(req) => (&req.model, &req.options),
         };
-        format!("{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}", 
-                model, 
-                options.num_ctx, 
-                options.repeat_last_n, 
-                options.repeat_penalty, 
-                options.temperature, 
-                options.seed, 
-                options.num_predict, 
-                options.top_k, 
-                options.top_p, 
-                options.stop.join(","), 
-                options.min_p)
+        format!(
+            "{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}",
+            model,
+            options.num_ctx,
+            options.repeat_last_n,
+            options.repeat_penalty,
+            options.temperature,
+            options.seed,
+            options.num_predict,
+            options.top_k,
+            options.top_p,
+            options.stop.join(","),
+            options.min_p
+        )
     }
 
     pub extern "C" fn llm_result_callback(
-        result: *mut RKLLMResult, 
-        userdata: *mut ::std::os::raw::c_void, 
-        state: LLMCallState
-    ) {
-        // Safety check: ensure pointers are valid
+        result: *mut RKLLMResult,
+        userdata: *mut ::std::os::raw::c_void,
+        state: LLMCallState,
+    ) -> i32 {
         if userdata.is_null() {
             eprintln!("Error: userdata is null in callback");
-            return;
+            return 0;
         }
 
-        // Don't take ownership yet - we might need to keep the sender alive
-        let sender_ptr = userdata as *mut Sender<String>;
-        
+        let sender_ptr =
+            userdata as *mut tokio::sync::mpsc::UnboundedSender<String>;
+
         let (response, should_end) = match state {
-            LLMCallState_RKLLM_RUN_FINISH => {
-                (String::from(""), true) // Empty response on finish
-            },
-            LLMCallState_RKLLM_RUN_ERROR => {
-                (String::from("[ERROR]"), true)
-            },
-            LLMCallState_RKLLM_RUN_WAITING => {
-                (String::from(""), false) // No response while waiting
-            },
+            LLMCallState_RKLLM_RUN_FINISH => (String::new(), true),
+            LLMCallState_RKLLM_RUN_ERROR => ("[ERROR]".to_string(), true),
+            LLMCallState_RKLLM_RUN_WAITING => (String::new(), false),
             LLMCallState_RKLLM_RUN_NORMAL => {
                 if result.is_null() {
-                    (String::from("[NULL_RESULT]"), false)
+                    ("[NULL_RESULT]".to_string(), false)
                 } else {
                     unsafe {
                         let text_ptr = (*result).text;
                         if text_ptr.is_null() {
-                            (String::from("[NULL_TEXT]"), false)
+                            ("[NULL_TEXT]".to_string(), false)
                         } else {
                             let cstr = CStr::from_ptr(text_ptr);
                             match cstr.to_str() {
                                 Ok(s) => (s.to_string(), false),
-                                Err(_) => (String::from("[INVALID_UTF8]"), false),
+                                Err(_) => ("[INVALID_UTF8]".to_string(), false),
                             }
                         }
                     }
                 }
-            },
-            _ => {
-                (format!("[UNKNOWN_STATE_{}]", state), true)
             }
+            _ => (format!("[UNKNOWN_STATE_{}]", state), true),
         };
 
-        // Only send non-empty responses
         if !response.is_empty() {
             unsafe {
                 let sender = &*sender_ptr;
                 if let Err(e) = sender.send(response) {
-                    eprintln!("Failed to send response: {}", e);
+                    eprintln!("Failed to send token: {}", e);
                 }
             }
         }
 
-        // Clean up the sender only when we're done
         if should_end {
             unsafe {
-                let _sender = Box::from_raw(sender_ptr);
-                // Sender will be dropped here, closing the channel
+                // Drop the sender → closes the channel → receiver sees EOF.
+                let _sender = Box::from_raw(
+                    sender_ptr
+                        as *mut tokio::sync::mpsc::UnboundedSender<String>,
+                );
             }
+            return 1;
+        }
+
+        0
+    }
+}
+
+// Ensure ModelEntry is not inadvertently made Sync (the raw handle is not).
+// The HashMap is behind Arc<Mutex<…>> so this is fine.
+unsafe impl Send for ModelEntry {}
+
+// ============================================================================
+// ModelRuntime trait implementation for RkllmRuntime
+// ============================================================================
+
+use crate::server::runtime_trait::{ModelHandle, ModelInfo, ModelRuntime};
+use async_trait::async_trait;
+
+/// Wrapper around RkllmModel that implements ModelHandle
+pub struct RkllmModelHandle {
+    inner: Arc<RkllmModel>,
+    keep_alive: Duration,
+    model_key: String,
+    model_path: String,
+}
+
+impl RkllmModelHandle {
+    pub fn new(model: Arc<RkllmModel>, keep_alive: Duration, model_key: String, model_path: String) -> Self {
+        Self {
+            inner: model,
+            keep_alive,
+            model_key,
+            model_path,
+        }
+    }
+}
+
+#[async_trait]
+impl ModelHandle for RkllmModelHandle {
+    fn run_inference(&self, messages: Vec<String>) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+        self.inner.run_inference(messages)
+    }
+
+    fn run_multimodal_inference(
+        &self,
+        prompt: String,
+        images: Vec<String>,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<String> {
+        self.inner.run_multimodal_inference(prompt, images)
+    }
+
+    fn keep_alive(&self) -> Duration {
+        self.keep_alive
+    }
+
+    fn model_info(&self) -> ModelInfo {
+        ModelInfo {
+            key: self.model_key.clone(),
+            model_path: self.model_path.clone(),
+            quantization: "W4A16".to_string(), // Default quantization
+            size_bytes: 1024 * 1024 * 500,    // Estimated size
+            loaded_at: std::time::SystemTime::now(),
+        }
+    }
+}
+
+#[async_trait]
+impl ModelRuntime for RkllmRuntime {
+    async fn get_or_load_model(&self, request: &CompletionRequest) -> crate::error::Result<Arc<dyn ModelHandle>> {
+        // Use the existing get_request_model method
+        let model = self.get_request_model(request).await.map_err(|e| crate::error::Error::Server(e))?;
+        let key = Self::parse_request_model_key(request);
+        let keep_alive = request.keep_alive();
+        let model_path = self.get_model_path(
+            match request {
+                CompletionRequest::Generate(r) => &r.model,
+                CompletionRequest::Chat(r) => &r.model,
+            }
+        );
+        Ok(Arc::new(RkllmModelHandle::new(model, keep_alive, key, model_path)))
+    }
+
+    async fn list_loaded_models(&self) -> Vec<ModelInfo> {
+        let models = self.running_models.lock().unwrap();
+        models
+            .iter()
+            .map(|(key, entry)| ModelInfo {
+                key: key.clone(),
+                model_path: entry.model.model_path.clone(),
+                quantization: "W4A16".to_string(),
+                size_bytes: 1024 * 1024 * 500,
+                loaded_at: std::time::SystemTime::now(),
+            })
+            .collect()
+    }
+
+    async fn unload_model(&self, model_key: &str) -> crate::error::Result<()> {
+        let mut models = self.running_models.lock().unwrap();
+        if models.remove(model_key).is_some() {
+            Ok(())
+        } else {
+            Err(crate::error::Error::Server(format!("Model not found: {}", model_key)))
         }
     }
 
-    // pub async fn generate_completion(&self, body: GenerateRequest) -> GenerateResponse {
-    //     // Implement the logic to generate a completion
-    //     unimplemented!()
-    // }
+    fn models_path(&self) -> &std::path::Path {
+        &self.models_path
+    }
+
+    fn loaded_model_count(&self) -> usize {
+        self.running_models.lock().unwrap().len()
+    }
+
+    fn is_model_loaded(&self, model_key: &str) -> bool {
+        self.running_models.lock().unwrap().contains_key(model_key)
+    }
 }
+
+#[cfg(test)]
+#[path = "rkllm_runtime_test.rs"]
+mod tests;

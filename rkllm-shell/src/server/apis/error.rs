@@ -23,6 +23,9 @@ pub enum ApiError {
     
     #[error("Internal server error: {0}")]
     InternalError(String),
+
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 #[derive(Serialize)]
@@ -64,6 +67,11 @@ impl IntoResponse for ApiError {
             ApiError::InternalError(msg) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "internal_server_error",
+                        msg.clone(),
+                    ),
+            ApiError::Internal(msg) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
                         msg.clone(),
                     ),
         };

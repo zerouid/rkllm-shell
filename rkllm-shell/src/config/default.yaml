@@ -1,2 +1,2 @@
-models_path: "./data"
-base_url: "0.0.0.0:3000"
+models_path: "/home/vanko/models"
+base_url: "127.0.0.1:3000"
