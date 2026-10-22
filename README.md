@@ -2,6 +2,11 @@
 
 A Rust-based shell and HTTP server for interacting with RKLLM (Rockchip Large Language Model) runtime. This project provides both a command-line interface and a REST API server for running and managing LLM models on Rockchip hardware.
 
+## Documentation
+
+- **📖 [User Guide](docs/user-guide.md)** - Comprehensive guide with examples
+- **🔧 [API Examples](docs/tests.http)** - HTTP API test examples
+
 ## Features
 
 - **HTTP Server**: REST API compatible with OpenAI-style endpoints
@@ -181,7 +186,8 @@ rkllm-shell/
 │   │   └── terminal/        # Terminal output formatting
 │   └── Cargo.toml
 ├── docs/
-│   └── tests.http          # HTTP API test examples
+│   ├── user-guide.md        # Comprehensive user guide
+│   └── tests.http           # HTTP API test examples
 └── README.md
 ```
 
