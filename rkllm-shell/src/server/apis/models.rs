@@ -58,7 +58,7 @@ fn sha256_file(path: &std::path::Path) -> Result<String, std::io::Error> {
 pub async fn sha256_file_async(path: std::path::PathBuf) -> Result<String, std::io::Error> {
     tokio::task::spawn_blocking(move || sha256_file(&path))
         .await
-        .unwrap_or_else(|e| Err(std::io::Error::new(std::io::ErrorKind::Other, e)))
+        .unwrap_or_else(|e| Err(std::io::Error::other(e)))
 }
 
 // ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ pub struct Args {
 async fn is_server_running(base_url: &str) -> bool {
     let client = reqwest::Client::new();
     if let Ok(response) = client
-        .get(&format!("http://{}/healthz", base_url))
+        .get(format!("http://{}/healthz", base_url))
         .timeout(std::time::Duration::from_millis(500))
         .send()
         .await

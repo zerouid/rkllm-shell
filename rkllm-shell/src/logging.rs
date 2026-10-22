@@ -1,8 +1,6 @@
 use std::sync;
 use std::io;
 
-use log;
-
 struct Logger<T> {
     level: log::LevelFilter,
     output: sync::Mutex<T>
@@ -11,7 +9,7 @@ struct Logger<T> {
 impl<T: Send + io::Write> Logger<T> {
     pub fn new(output: T, level: log::LevelFilter) -> Logger<io::LineWriter<T>> {
         Logger {
-            level: level,
+            level,
             output: sync::Mutex::new(io::LineWriter::new(output))
         }
     }

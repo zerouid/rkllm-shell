@@ -72,7 +72,7 @@ pub async fn generate_chat_completion(
         .runtime
         .get_request_model(&CompletionRequest::Chat(request.clone()))
         .await
-        .map_err(|e| axum::response::ErrorResponse::from(e))?;
+        .map_err(axum::response::ErrorResponse::from)?;
 
     // Extract images from messages
     let images = extract_images(&request.messages);
@@ -218,7 +218,7 @@ pub async fn openai_chat_completions(
         .runtime
         .get_request_model(&CompletionRequest::Chat(internal.clone()))
         .await
-        .map_err(|e| axum::response::ErrorResponse::from(e))?;
+        .map_err(axum::response::ErrorResponse::from)?;
 
     let ollama_msgs = build_ollama_messages(&internal.messages);
     let rx = model.run_inference(ollama_msgs);

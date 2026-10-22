@@ -41,15 +41,15 @@ impl ChatRequestBuilder {
         self
     }
 
-    pub fn system(mut self, content: &str) -> Self {
+    pub fn system(self, content: &str) -> Self {
         self.message(Role::System, content)
     }
 
-    pub fn user(mut self, content: &str) -> Self {
+    pub fn user(self, content: &str) -> Self {
         self.message(Role::User, content)
     }
 
-    pub fn assistant(mut self, content: &str) -> Self {
+    pub fn assistant(self, content: &str) -> Self {
         self.message(Role::Assistant, content)
     }
 
@@ -157,15 +157,15 @@ impl OpenAiChatRequestBuilder {
         self
     }
 
-    pub fn system(mut self, content: &str) -> Self {
+    pub fn system(self, content: &str) -> Self {
         self.message("system", content)
     }
 
-    pub fn user(mut self, content: &str) -> Self {
+    pub fn user(self, content: &str) -> Self {
         self.message("user", content)
     }
 
-    pub fn assistant(mut self, content: &str) -> Self {
+    pub fn assistant(self, content: &str) -> Self {
         self.message("assistant", content)
     }
 
@@ -239,9 +239,11 @@ pub fn temp_dir() -> tempfile::TempDir {
 /// Create a test configuration
 pub fn test_config() -> crate::config::Config {
     let dir = temp_dir();
-    let mut config = crate::config::Config::default();
-    config.dir = dir.path().to_path_buf();
-    config.models_path = Some(dir.path().join("models"));
+    let config = crate::config::Config {
+        dir: dir.path().to_path_buf(),
+        models_path: Some(dir.path().join("models")),
+        ..Default::default()
+    };
     config
 }
 

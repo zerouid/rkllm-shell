@@ -3,15 +3,12 @@
 use crate::server::apis::agent::{AgentChatRequest, AgentChatMessage, AgentStreamChunk, messages_to_prompt};
 use crate::server::test_helpers::test_config;
 use axum::{
-    body::Body,
-    http::{Request, StatusCode},
+    http::StatusCode,
     routing::post,
     Router,
 };
 use axum_test::TestServer;
 use serde_json::json;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 #[cfg(test)]
 mod tests {
@@ -203,7 +200,7 @@ mod tests {
 mod integration_tests {
     use super::*;
     use crate::server::{AppState, rig_provider::RkllmClient, rkllm_runtime::RkllmRuntime};
-    use crate::config::Config;
+    
     use std::path::PathBuf;
     use std::sync::Arc;
 

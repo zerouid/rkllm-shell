@@ -10,7 +10,7 @@ struct FileDownLoad {
     dst: &'static str,
 }
 
-const DOWNLOAD_BASE_URL: &'static str = "https://raw.githubusercontent.com/airockchip/rknn-llm/refs/heads/main/rkllm-runtime/Linux/librkllm_api/";
+const DOWNLOAD_BASE_URL: &str = "https://raw.githubusercontent.com/airockchip/rknn-llm/refs/heads/main/rkllm-runtime/Linux/librkllm_api/";
 const LIBS: [FileDownLoad; 1] = [FileDownLoad {
     src: "aarch64/librkllmrt.so",
     dst: "vendor/lib/aarch64/librkllmrt.so",
@@ -26,7 +26,7 @@ const INCLUDES: [FileDownLoad; 1] = [
 fn main() {
     for f in LIBS.iter().chain(INCLUDES.iter()) {
         let url = format!("{}{}", DOWNLOAD_BASE_URL, &f.src);
-        match download_image(&url, &f.dst) {
+        match download_image(&url, f.dst) {
             Ok(_) => (),
             Err(_) => panic!("Failed to download {}", &url),
         }

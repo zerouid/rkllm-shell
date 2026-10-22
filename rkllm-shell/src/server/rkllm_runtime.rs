@@ -11,8 +11,8 @@ use rkllm_api_sys::{
     LLMCallState, LLMCallState_RKLLM_RUN_ERROR, LLMCallState_RKLLM_RUN_FINISH,
     LLMCallState_RKLLM_RUN_NORMAL, LLMCallState_RKLLM_RUN_WAITING, LLMHandle,
     RKLLMCallback, RKLLMInferMode_RKLLM_INFER_GENERATE, RKLLMInferParam, RKLLMInput,
-    RKLLMInputType_RKLLM_INPUT_PROMPT, RKLLMInputType_RKLLM_INPUT_MULTIMODAL,
-    RKLLMInput__bindgen_ty_1, RKLLMResult, RKLLMMultiModalInput,
+    RKLLMInputType_RKLLM_INPUT_PROMPT,
+    RKLLMInput__bindgen_ty_1, RKLLMResult,
 };
 
 use crate::server::api_models::{ChatCompletionRequest, GenerateRequest};
@@ -148,8 +148,7 @@ impl RkllmModel {
                     // Clean up sender — dropping it closes the channel so the
                     // receiver sees EOF.
                     let _sender = Box::from_raw(
-                        sender_ptr
-                            as *mut tokio::sync::mpsc::UnboundedSender<String>,
+                        sender_ptr as *mut tokio::sync::mpsc::UnboundedSender<String>,
                     );
                 }
             }
@@ -258,7 +257,7 @@ impl RkllmRuntime {
         // Return only the base model name (first component of the composite key)
         models
             .keys()
-            .filter_map(|k| k.splitn(2, '-').next().map(str::to_string))
+            .filter_map(|k| k.split('-').next().map(str::to_string))
             .collect()
     }
 
@@ -507,6 +506,9 @@ impl RkllmRuntime {
             return 0;
         }
 
+        // userdata is passed as *mut c_void from C, but we know it's actually
+        // a *mut UnboundedSender<String>. The cast is necessary here.
+        #[allow(clippy::unnecessary_cast)]
         let sender_ptr =
             userdata as *mut tokio::sync::mpsc::UnboundedSender<String>;
 
@@ -547,9 +549,10 @@ impl RkllmRuntime {
         if should_end {
             unsafe {
                 // Drop the sender → closes the channel → receiver sees EOF.
+                // sender_ptr is already *mut UnboundedSender<String> from line 513
+                #[allow(clippy::unnecessary_cast)]
                 let _sender = Box::from_raw(
-                    sender_ptr
-                        as *mut tokio::sync::mpsc::UnboundedSender<String>,
+                    sender_ptr as *mut tokio::sync::mpsc::UnboundedSender<String>,
                 );
             }
             return 1;
@@ -622,7 +625,7 @@ impl ModelHandle for RkllmModelHandle {
 impl ModelRuntime for RkllmRuntime {
     async fn get_or_load_model(&self, request: &CompletionRequest) -> crate::error::Result<Arc<dyn ModelHandle>> {
         // Use the existing get_request_model method
-        let model = self.get_request_model(request).await.map_err(|e| crate::error::Error::Server(e))?;
+        let model = self.get_request_model(request).await.map_err(crate::error::Error::Server)?;
         let key = Self::parse_request_model_key(request);
         let keep_alive = request.keep_alive();
         let model_path = self.get_model_path(

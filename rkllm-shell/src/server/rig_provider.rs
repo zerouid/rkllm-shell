@@ -1,11 +1,9 @@
 //! RKLLM rig Provider - Implements rig's CompletionModel for RKLLM runtime
 
-use std::pin::Pin;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use rig::client::CompletionClient;
 use rig::completion::{
     CompletionModel, CompletionRequest, CompletionResponse, CompletionError,
@@ -14,11 +12,10 @@ use rig::completion::{
 };
 use rig_core::OneOrMany;
 use rig::message::{UserContent, Text};
-use rig::streaming::{StreamingCompletionResponse, RawStreamingChoice, PauseControl};
+use rig::streaming::{StreamingCompletionResponse, RawStreamingChoice};
 use rig_core::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::server::rkllm_runtime::{RkllmRuntime, CompletionRequest as RkllmRequest};
@@ -153,11 +150,8 @@ impl RkllmCompletionModel {
                 }
                 Message::Assistant { content, id: _ } => {
                     for item in content {
-                        match item {
-                            AssistantContent::Text(text) => {
-                                prompt_parts.push(format!("Assistant: {}", text.text));
-                            }
-                            _ => {}
+                        if let AssistantContent::Text(text) = item {
+                            prompt_parts.push(format!("Assistant: {}", text.text));
                         }
                     }
                 }

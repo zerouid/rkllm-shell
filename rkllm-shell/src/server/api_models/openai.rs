@@ -1,6 +1,5 @@
 //! OpenAI-compatible request/response types for /v1/chat/completions and /v1/models
 
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use utoipa::ToSchema;

@@ -2,10 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use utoipa::ToSchema;
-
-use crate::server::defaults::*;
 
 // ---------------------------------------------------------------------------
 // Ollama Model Management types

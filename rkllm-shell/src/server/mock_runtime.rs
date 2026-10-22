@@ -3,7 +3,7 @@
 //! This module provides a fully functional mock implementation of the
 //! ModelRuntime and ModelHandle traits for unit and integration testing.
 
-use super::runtime_trait::{ModelHandle, ModelInfo, ModelRuntime, RuntimeError};
+use super::runtime_trait::{ModelHandle, ModelInfo, ModelRuntime};
 use crate::error::Result;
 use crate::server::rkllm_runtime::CompletionRequest;
 use async_trait::async_trait;
@@ -399,7 +399,7 @@ impl MockRuntimeBuilder {
     }
 
     pub fn build(self) -> MockRuntime {
-        let mut runtime = if let Some(path) = self.models_path {
+        let runtime = if let Some(path) = self.models_path {
             MockRuntime::with_models_path(path)
         } else {
             MockRuntime::with_config(self.config)

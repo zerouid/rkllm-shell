@@ -1,7 +1,5 @@
 use clap::Parser;
-use rig::agent::AgentBuilder;
 use rig::completion::Prompt;
-use rig::tool::Tool;
 
 use crate::{
     config::Config,
@@ -92,7 +90,7 @@ pub async fn run(config: &Config, options: &Args) -> Result<()> {
     Ok(())
 }
 
-async fn run_agent_repl(mut agent: rig::agent::Agent<RkllmCompletionModel>) -> Result<()> {
+async fn run_agent_repl(agent: rig::agent::Agent<RkllmCompletionModel>) -> Result<()> {
     use std::io::{self, Write};
     
     loop {

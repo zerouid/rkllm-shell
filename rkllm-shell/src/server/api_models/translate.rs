@@ -4,8 +4,8 @@ use chrono::Utc;
 use std::time::Duration;
 
 use crate::server::api_models::{
-    ollama::{ChatCompletionRequest as OllamaChatRequest, ChatCompletionRequestMessage as OllamaMessage, ChatCompletionResponse as OllamaChatResponse, GenerateRequest as OllamaGenerateRequest, GenerateResponse as OllamaGenerateResponse, EmbedRequest as OllamaEmbedRequest, EmbedResponse as OllamaEmbedResponse, Role},
-    openai::{OpenAiChatRequest, OpenAiChatResponse, OpenAiChatChunk, OpenAiStreamChoice, OpenAiDelta, OpenAiChoice, OpenAiUsage, OpenAiMessage, OpenAiContent, OpenAiContentPart, OpenAiImageUrl},
+    ollama::{ChatCompletionRequest as OllamaChatRequest, ChatCompletionRequestMessage as OllamaMessage, ChatCompletionResponse as OllamaChatResponse, GenerateRequest as OllamaGenerateRequest, EmbedResponse as OllamaEmbedResponse, Role},
+    openai::{OpenAiChatRequest, OpenAiChatResponse, OpenAiChatChunk, OpenAiStreamChoice, OpenAiDelta, OpenAiChoice, OpenAiUsage, OpenAiMessage, OpenAiContent, OpenAiContentPart},
 };
 
 /// Convert OpenAI Chat Request to Ollama Chat Request

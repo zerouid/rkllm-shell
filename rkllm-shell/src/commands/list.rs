@@ -42,7 +42,7 @@ pub async fn run(config: &Config, _options: &Args) -> Result<()> {
     }
 
     // Print header
-    println!("{:<50} {:>12}  {}", "NAME", "SIZE", "QUANTIZATION");
+    println!("{:<50} {:>12}  QUANTIZATION", "NAME", "SIZE");
 
     for m in &models {
         let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("-");

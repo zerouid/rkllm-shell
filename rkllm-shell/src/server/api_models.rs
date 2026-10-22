@@ -25,10 +25,7 @@ pub use ollama_models::{
 pub use openai::{
     OpenAiMessage, OpenAiChatRequest, OpenAiChatResponse,
     OpenAiChoice, OpenAiUsage, OpenAiDelta, OpenAiStreamChoice, OpenAiChatChunk,
-    OpenAiModel, OpenAiModelList, ServiceTier,
+    ServiceTier,
 };
 
 // Re-export translation helpers
-pub use translate::{
-    openai_done_chunk, ollama_embed_to_openai, openai_role_to_ollama, default_keep_alive,
-};

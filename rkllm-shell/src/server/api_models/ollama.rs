@@ -13,18 +13,15 @@ use crate::server::defaults::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Role {
     System,
+    #[default]
     User,
     Assistant,
     Tool,
 }
 
-impl Default for Role {
-    fn default() -> Self {
-        Role::User
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct ChatCompletionRequestMessage {

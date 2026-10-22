@@ -33,7 +33,7 @@ pub async fn generate_completion(
         .runtime
         .get_request_model(&CompletionRequest::Generate(request.clone()))
         .await
-        .map_err(|e| axum::response::ErrorResponse::from(e))?;
+        .map_err(axum::response::ErrorResponse::from)?;
 
     // Build the prompt string, optionally prepending a system message.
     let mut messages = Vec::new();

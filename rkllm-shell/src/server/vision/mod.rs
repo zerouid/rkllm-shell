@@ -6,7 +6,6 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 use image::DynamicImage;
-use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Image Processing Utilities
@@ -98,7 +97,7 @@ pub fn preprocess_image(
     let rgb = resized.to_rgb8();
 
     let mean = [0.48145466_f32, 0.4578275, 0.40821073];
-    let std = [0.26862954_f32, 0.26130258, 0.27577711];
+    let std = [0.26862954_f32, 0.261_302_6, 0.275_777_1];
 
     let mut output = Vec::with_capacity((target_size.0 * target_size.1 * 3) as usize);
 
@@ -258,6 +257,14 @@ pub fn build_multimodal_input(
                     video_content: std::ptr::null(),
                     frame_width: 0,
                     frame_height: 0,
+                },
+                audio: rkllm_api_sys::RKLLMMultiModalInput__bindgen_ty_3 {
+                    audio_embed: std::ptr::null_mut(),
+                    n_audio_tokens: 0,
+                    n_audio: 0,
+                    audio_start: std::ptr::null(),
+                    audio_end: std::ptr::null(),
+                    audio_content: std::ptr::null(),
                 },
             },
         },

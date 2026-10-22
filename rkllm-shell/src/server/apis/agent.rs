@@ -6,24 +6,17 @@ use axum::{
     response::IntoResponse,
 };
 use futures::Stream;
-use rig::agent::Agent;
 use rig::completion::Prompt;
-use rig::tool::Tool;
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
 use rig::agent::MultiTurnStreamItem;
-use rig::message::Text;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::pin::Pin;
-use std::sync::Arc;
 use tokio_stream::StreamExt;
 use utoipa::ToSchema;
 
-use crate::config::Config;
 use crate::error::Result as RkllmResult;
-use crate::server::rig_provider::RkllmClient;
 use crate::server::AppState;
-use crate::server::api_models::ollama::{ChatCompletionRequestMessage, Role};
 use crate::terminal::message::write;
 
 /// Request for agent chat

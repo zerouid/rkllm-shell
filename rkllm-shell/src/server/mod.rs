@@ -242,7 +242,7 @@ async fn wait_for_server(base_url: &str) -> crate::error::Result<()> {
     let client = reqwest::Client::new();
     for _ in 0..50 {
         if let Ok(response) = client
-            .get(&format!("http://{}/healthz", base_url))
+            .get(format!("http://{}/healthz", base_url))
             .send()
             .await
         {
